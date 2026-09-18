@@ -10,6 +10,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { formatDateTime } from '@/utils/date'
 import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
 import { formatDuration } from '../utils/format'
 import {
@@ -22,6 +23,7 @@ import {
   usageReasoningEffort,
   usageTokenDetails,
   usageTransportType,
+  usageTurnStateDetail,
   usageUserAgent,
   visibleRequestText,
   visibleResponseText,
@@ -43,7 +45,10 @@ const requestText = computed(() => props.record ? visibleRequestText(props.recor
 const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
 const modelDisplay = computed(() => props.record
   ? usageModelDisplay(props.record)
-  : { primary: '—', secondary: '' })
+  : { primary: '—', secondary: '', routes: [], turnState: usageTurnStateDetail({ turnStateBytes: null }) })
+const turnState = computed(() => props.record
+  ? usageTurnStateDetail(props.record)
+  : usageTurnStateDetail({ turnStateBytes: null }))
 const tokenDetails = computed(() => props.record ? usageTokenDetails(props.record) : null)
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
@@ -83,6 +88,56 @@ const modelRouteItems = computed(() => [
   { label: '上游返回模型', value: props.record?.upstreamResponseModel, mono: true },
 ])
 
+const turnStateItems = computed(() => [
+  {
+    label: '判定',
+    value: turnState.value.shape
+      ? `${turnState.value.label}（${turnState.value.shape} ${turnState.value.blocks} 块 / ${turnState.value.chars} 字符）`
+      : turnState.value.label,
+  },
+  {
+    label: '密文块数',
+    value: turnState.value.blocks === null
+      ? null
+      : `${turnState.value.blocks} 块（明文 ${turnState.value.plaintextMinBytes}–${turnState.value.plaintextMaxBytes} 字节）`,
+    mono: true,
+  },
+  {
+    label: '密文长度',
+    value: turnState.value.bytes === null
+      ? null
+      : `${turnState.value.bytes} 字节 / base64 ${turnState.value.chars} 字符`,
+    mono: true,
+  },
+  { label: '令牌版本', value: turnState.value.version, mono: true },
+  {
+    label: '签发时间',
+    value: turnState.value.issuedAt ? formatDateTime(turnState.value.issuedAt) : null,
+    mono: true,
+    wrap: true,
+  },
+  {
+    label: '有效期至',
+    value: turnState.value.expiresAt
+      ? `${formatDateTime(turnState.value.expiresAt)}（实测约 ${turnState.value.ttlHours} 小时）`
+      : null,
+    mono: true,
+    wrap: true,
+  },
+])
+
+const turnStateNote = computed(() => {
+  const shapes = turnState.value.normalShapes
+    .map(shape => `${shape.label} ${shape.blocks} 块 / ${shape.chars} 字符`)
+    .join('、')
+  const degraded = turnState.value.normalShapes
+    .map(shape => shape.degradedChars)
+    .join(' / ')
+  const base = `按 Fernet 密文块数判定：正常形态为 ${shapes}，疑似降智在各自基线上恰好多一块（${degraded} 字符）；块数只能把明文框进 16 字节的窗口，这是疑似判据而非确证。`
+  if (turnState.value.status === 'unknown')
+    return `${base}本次没有可用的体积事实，无法判定。`
+  return base
+})
 const clientUpstreamItems = computed(() => [
   { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
   { label: '服务档位', value: props.record?.serviceTier, mono: true },
@@ -352,6 +407,16 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           </h3>
           <UsageDetailFieldGrid :items="clientUpstreamItems" />
         </section>
+      </section>
+
+      <section :class="panelClass">
+        <h3 :class="panelTitleClass">
+          降智检测
+        </h3>
+        <p class="mt-1.5 mb-0 text-cp-xs leading-snug text-cp-text-tertiary">
+          {{ turnStateNote }}
+        </p>
+        <UsageDetailFieldGrid :items="turnStateItems" />
       </section>
 
       <section :class="panelClass">

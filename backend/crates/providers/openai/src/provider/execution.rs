@@ -1147,6 +1147,7 @@ async fn merge_response_metadata_updates(
             capture.turn_state = Some(turn_state.clone());
         }
         changed |= observation_state.merge_client_header("x-codex-turn-state", &turn_state);
+        changed |= observation_state.observe_turn_state(&turn_state);
     }
     if let Some(model) = reported_model {
         decoder.observe_reported_model(&model);

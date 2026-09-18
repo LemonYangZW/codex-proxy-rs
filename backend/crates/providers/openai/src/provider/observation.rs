@@ -1,5 +1,7 @@
 //! OpenAI 请求、响应与 transport 观测事实归一化。
 
+use chrono::{DateTime, SecondsFormat};
+
 use super::*;
 
 pub(super) fn endpoint_requested_model(
@@ -34,6 +36,7 @@ pub(super) struct OpenAiResponseObservationState {
     requested_service_tier: Option<String>,
     upstream_service_tier: Option<String>,
     upstream_response_model: Option<String>,
+    turn_state: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     timings: ProviderResponseTimings,
     terminal: Option<OpenAiResponseTerminal>,
@@ -65,6 +68,45 @@ pub(super) enum OpenAiResponseTerminal {
     Incomplete,
 }
 
+/// 解码后的 turn-state 令牌事实；令牌本体是凭据态密文，不进入观测数据。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct TurnStateFacts {
+    version: u8,
+    issued_at_unix: i64,
+    raw_bytes: usize,
+}
+
+/// 解码 turn-state 令牌的展示事实：Fernet 封装下 raw[0] 为版本字节，raw[1..9] 为大端 u64 秒级时间戳。
+///
+/// 该时间戳是签名时刻而非过期时刻，实测有效期约 1 小时；版本与时间戳只用于标识封装形态，
+/// 是否疑似降智由展示层按密文块数判断。
+///
+/// 上游轮换中可能出现带 padding 的变体，两种 URL-safe 字母表都接受；
+/// 时间戳落在 2020 年之前或 2100 年之后视为随机字节，不产出事实。
+pub(super) fn decode_turn_state_facts(token: &str) -> Option<TurnStateFacts> {
+    use base64::{
+        Engine as _,
+        engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    };
+    let token = token.trim();
+    let raw = URL_SAFE_NO_PAD
+        .decode(token)
+        .or_else(|_| URL_SAFE.decode(token))
+        .ok()?;
+    if raw.len() < 9 {
+        return None;
+    }
+    let timestamp = u64::from_be_bytes(raw[1..9].try_into().ok()?);
+    let issued_at_unix = i64::try_from(timestamp).ok()?;
+    (1_577_836_800..4_102_444_800)
+        .contains(&issued_at_unix)
+        .then_some(TurnStateFacts {
+            version: raw[0],
+            issued_at_unix,
+            raw_bytes: raw.len(),
+        })
+}
+
 impl OpenAiResponseObservationState {
     pub(super) fn from_backend_response(
         response: &CodexBackendStreamingResponse,
@@ -81,6 +123,7 @@ impl OpenAiResponseObservationState {
             requested_service_tier: normalize_service_tier(request.service_tier()),
             upstream_service_tier: None,
             upstream_response_model: response.response_metadata.effective_model.clone(),
+            turn_state: response.turn_state.clone(),
             rate_limit_headers: selected_observation_headers(&response.rate_limit_headers),
             timings: openai_response_timings(
                 &response.transport_metrics,
@@ -126,6 +169,9 @@ impl OpenAiResponseObservationState {
         if let Some(model) = &self.upstream_response_model {
             observation = observation.with_upstream_response_model_if_valid(model);
         }
+        if let Some(bytes) = self.turn_state_bytes() {
+            observation = observation.with_turn_state_bytes_if_valid(bytes);
+        }
         Some(observation)
     }
 
@@ -138,6 +184,24 @@ impl OpenAiResponseObservationState {
         }
         self.upstream_response_model = Some(model.to_owned());
         true
+    }
+
+    /// 记录上游最新签发的 turn-state 令牌；轮换更新以最新为准。
+    pub(super) fn observe_turn_state(&mut self, turn_state: &str) -> bool {
+        if self.turn_state.as_deref() == Some(turn_state) {
+            return false;
+        }
+        self.turn_state = Some(turn_state.to_owned());
+        true
+    }
+
+    fn turn_state_facts(&self) -> Option<TurnStateFacts> {
+        decode_turn_state_facts(self.turn_state.as_deref()?)
+    }
+
+    /// 上游令牌的密文字节数；降智启发式由展示层基于该事实解释。
+    pub(super) fn turn_state_bytes(&self) -> Option<u32> {
+        u32::try_from(self.turn_state_facts()?.raw_bytes).ok()
     }
 
     pub(super) fn observe_stream_chunk(&mut self, chunk: &[u8], started_at: Instant) -> bool {
@@ -261,6 +325,21 @@ impl OpenAiResponseObservationState {
             "reasoningIncluded".to_owned(),
             Value::Bool(self.response_metadata.reasoning_included),
         );
+        if let Some(facts) = self.turn_state_facts() {
+            metadata.insert(
+                "turnStateVersion".to_owned(),
+                json!(format!("0x{:02x}", facts.version)),
+            );
+            metadata.insert(
+                "turnStateIssuedAtUnix".to_owned(),
+                json!(facts.issued_at_unix),
+            );
+            let issued_at = DateTime::from_timestamp(facts.issued_at_unix, 0)
+                .map(|time| Value::String(time.to_rfc3339_opts(SecondsFormat::Secs, true)))
+                .unwrap_or(Value::Null);
+            metadata.insert("turnStateIssuedAt".to_owned(), issued_at);
+            metadata.insert("turnStateBytes".to_owned(), json!(facts.raw_bytes));
+        }
         metadata.insert("stream".to_owned(), Value::Bool(self.stream));
         metadata.insert(
             "rateLimitHeaders".to_owned(),

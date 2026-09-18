@@ -30,6 +30,7 @@ export interface UsageViewModel {
   requestedModel: string | null
   upstreamModel: string | null
   upstreamResponseModel: string | null
+  turnStateBytes: number | null
   serviceTier: string | null
   statusCode: number | null
   clientTransport: string
@@ -98,6 +99,7 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
     requestedModel: record.requestedModel,
     upstreamModel: record.upstreamModel,
     upstreamResponseModel: record.upstreamResponseModel,
+    turnStateBytes: record.turnStateBytes,
     serviceTier: record.serviceTier,
     statusCode: record.statusCode,
     clientTransport: record.clientTransport,
@@ -239,11 +241,168 @@ export function usageModelDisplay(record: UsageCommonRecord) {
     })
   }
 
-  return { primary, secondary, routes }
+  return { primary, secondary, routes, turnState: usageTurnState(record) }
 }
 
 export function usageTokenDetails(record: Pick<UsageCommonRecord, 'tokenDetails'>) {
   return record.tokenDetails
+}
+
+/**
+ * X-Codex-Turn-State 走标准 Fernet 封装：0x80 版本字节 + 8 字节大端秒级时间戳 + 16 字节 IV
+ * + AES-CBC 密文 + 32 字节 HMAC。这里只读封装体积，不解密，也不需要密钥。
+ */
+const FERNET_VERSION = '0x80'
+/** 版本、签发时间戳、IV 与 HMAC 的固定开销。 */
+const FERNET_OVERHEAD_BYTES = 1 + 8 + 16 + 32
+/** AES-CBC 分组长度；密文体积只能是它的整数倍。 */
+const FERNET_BLOCK_BYTES = 16
+
+/**
+ * 实测出来的正常形态表，按账号类型分两种：个人号 10 块 / 292 字符，team 号 12 块 / 332 字符。
+ * 疑似降智一律在各自基线上多出恰好一块（个人号 312 字符、team 号 356 字符），
+ * 所以不能拿一个阈值切两种形态。
+ *
+ * 判据强度：样本不多，且 PKCS7 填充下块数只能把明文框进一个 16 字节窗口，
+ * 多一块只说明明文跨过了一次边界，不等于内容正好多 16 字节。上游改结构后需重新标定。
+ */
+const TURN_STATE_SHAPES = [
+  { key: 'individual', label: '个人号', blocks: 10, chars: 292, degradedChars: 312 },
+  { key: 'team', label: 'team 号', blocks: 12, chars: 332, degradedChars: 356 },
+] as const
+
+/** 上游签发的轮次状态实测约 1 小时后失效；时长只用于展示，不参与判定。 */
+const TURN_STATE_TTL_MS = 60 * 60 * 1000
+
+/** normal 命中正常形态，suspect 是块数落在表外，unknown 是读不出 Fernet 结构。 */
+export type UsageTurnStateStatus = 'normal' | 'suspect' | 'unknown'
+
+export interface UsageTurnState {
+  status: UsageTurnStateStatus
+  label: string
+  /** 命中的正常形态名称；未命中为 null。 */
+  shape: string | null
+  /** 密文块数；读不出 Fernet 结构为 null。 */
+  blocks: number | null
+  /** 解码后的密文字节数；上游未下发令牌为 null。 */
+  bytes: number | null
+  /** base64 字符串长度；由字节数按填充规则推算。 */
+  chars: number | null
+  /** PKCS7 填充下明文长度的闭区间。 */
+  plaintextMinBytes: number | null
+  plaintextMaxBytes: number | null
+  description: string
+}
+
+/**
+ * 按 Fernet 密文块数标注单次请求的降智检测状态。
+ *
+ * 只使用服务端已解码的体积事实，不接触令牌本体；上游未在本次响应下发令牌、
+ * 或该值不是 Fernet 结构时记无法判定，不因缺少事实推断是否为降智。
+ */
+export function usageTurnState(record: Pick<UsageCommonRecord, 'turnStateBytes'>): UsageTurnState {
+  const bytes = record.turnStateBytes
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 1)
+    return turnStateUnknown('本次响应未观测到上游 turn-state 令牌，无法从体积判断是否降智')
+
+  const normalized = Math.trunc(bytes)
+  const chars = Math.ceil(normalized / 3) * 4
+  const cipherBytes = normalized - FERNET_OVERHEAD_BYTES
+  // 空明文也要占满一个填充块，所以密文至少一块，且必然与分组对齐。
+  if (cipherBytes < FERNET_BLOCK_BYTES || cipherBytes % FERNET_BLOCK_BYTES !== 0) {
+    return turnStateUnknown(
+      `本次 turn-state 解码后 ${normalized} 字节（base64 ${chars} 字符），不是 Fernet 结构，无法判定`,
+    )
+  }
+
+  const blocks = cipherBytes / FERNET_BLOCK_BYTES
+  const plaintextMinBytes = cipherBytes - FERNET_BLOCK_BYTES
+  const plaintextMaxBytes = cipherBytes - 1
+  const shape = TURN_STATE_SHAPES.find(candidate => candidate.blocks === blocks)
+  if (!shape) {
+    const normalShapes = TURN_STATE_SHAPES
+      .map(candidate => `${candidate.label} ${candidate.blocks} 块 / ${candidate.chars} 字符`)
+      .join('、')
+    return {
+      status: 'suspect',
+      label: '疑似降智',
+      shape: null,
+      blocks,
+      bytes: normalized,
+      chars,
+      plaintextMinBytes,
+      plaintextMaxBytes,
+      description: `密文 ${blocks} 块（${chars} 字符），不在已知的正常形态里（${normalShapes}）；降智的值在各自基线上恰好多一块，疑似降智请求。块数只能把明文框进 16 字节窗口，这是疑似判据而非确证`,
+    }
+  }
+
+  return {
+    status: 'normal',
+    label: '正常',
+    shape: shape.label,
+    blocks,
+    bytes: normalized,
+    chars,
+    plaintextMinBytes,
+    plaintextMaxBytes,
+    description: `密文 ${blocks} 块，命中正常形态：${shape.label}（${chars} 字符）`,
+  }
+}
+
+function turnStateUnknown(description: string): UsageTurnState {
+  return {
+    status: 'unknown',
+    label: '无法判定',
+    shape: null,
+    blocks: null,
+    bytes: null,
+    chars: null,
+    plaintextMinBytes: null,
+    plaintextMaxBytes: null,
+    description,
+  }
+}
+
+/**
+ * 详情展示所需的 turn-state 事实：形态判定加签发与有效期。
+ *
+ * 版本与签发时刻取 Provider 观测 JSON；时间戳是 Fernet 自带的签发时刻，
+ * 有效期按实测的约 1 小时推算，都不是上游声明的字段。
+ */
+export function usageTurnStateDetail(
+  record: Pick<UsageCommonRecord, 'turnStateBytes'> & { providerMetadata?: Record<string, unknown> },
+) {
+  const state = usageTurnState(record)
+  const metadata = isRecord(record.providerMetadata) ? record.providerMetadata : {}
+  const version = typeof metadata.turnStateVersion === 'string' ? metadata.turnStateVersion : null
+  const issuedAt = typeof metadata.turnStateIssuedAt === 'string' ? metadata.turnStateIssuedAt : null
+  const issuedAtMs = issuedAt === null ? null : Date.parse(issuedAt)
+  // 版本字节不是 0x80 就不是 Fernet 封装，块数判定失去前提；体积事实照常保留。
+  const verdict: UsageTurnState = version !== null && version !== FERNET_VERSION
+    ? {
+        ...state,
+        status: 'unknown',
+        label: '无法判定',
+        shape: null,
+        description: `令牌版本 ${version} 不是 Fernet 的 0x80，无法判定`,
+      }
+    : state
+
+  return {
+    ...verdict,
+    version,
+    issuedAt,
+    expiresAt: issuedAtMs === null || !Number.isFinite(issuedAtMs)
+      ? null
+      : new Date(issuedAtMs + TURN_STATE_TTL_MS).toISOString(),
+    ttlHours: TURN_STATE_TTL_MS / (60 * 60 * 1000),
+    normalShapes: TURN_STATE_SHAPES.map(candidate => ({
+      label: candidate.label,
+      blocks: candidate.blocks,
+      chars: candidate.chars,
+      degradedChars: candidate.degradedChars,
+    })),
+  }
 }
 
 export function usageLatencyDetails(record: Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'>) {

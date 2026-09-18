@@ -85,6 +85,8 @@ pub struct UsageListRecordView {
     pub requested_model: Option<String>,
     pub upstream_model: Option<String>,
     pub upstream_response_model: Option<String>,
+    /// 上游 turn-state 令牌的密文字节数；缺失表示无令牌或未能解码。
+    pub turn_state_bytes: Option<u64>,
     pub service_tier: Option<String>,
     pub client_transport: String,
     pub upstream_transport: Option<String>,
@@ -124,6 +126,8 @@ pub struct UsageRecordView {
     pub requested_model: Option<String>,
     pub upstream_model: Option<String>,
     pub upstream_response_model: Option<String>,
+    /// 上游 turn-state 令牌的密文字节数；缺失表示无令牌或未能解码。
+    pub turn_state_bytes: Option<u64>,
     pub service_tier: Option<String>,
     pub status_code: Option<i64>,
     pub client_transport: String,

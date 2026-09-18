@@ -864,6 +864,7 @@ fn total_record(
         upstream_model_id: Some("gpt-5.5".to_owned()),
         upstream_transport: None,
         upstream_response_model: None,
+        turn_state_bytes: None,
         service_tier: None,
         input_tokens: Some(800),
         output_tokens: Some(200),

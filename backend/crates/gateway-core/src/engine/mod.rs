@@ -686,6 +686,8 @@ pub struct ModelRequestFinalization {
     pub websocket_pool: Option<String>,
     pub service_tier: Option<String>,
     pub upstream_response_model: Option<String>,
+    /// Provider 从上游 turn-state 令牌解出的密文字节数；无令牌或解析失败时为空。
+    pub turn_state_bytes: Option<u32>,
     /// Provider 已筛选的专有观测 JSON；Core 不解释字段。
     pub provider_metadata_json: Option<String>,
     /// 请求全程的有界诊断快照，跨 Provider 与重试保留。

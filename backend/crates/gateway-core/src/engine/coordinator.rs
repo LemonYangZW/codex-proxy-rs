@@ -1506,6 +1506,11 @@ where
                 .and_then(|current| current.response_observation.as_ref())
                 .and_then(ProviderResponseObservation::upstream_response_model)
                 .map(str::to_owned),
+            turn_state_bytes: self
+                .current
+                .as_ref()
+                .and_then(|current| current.response_observation.as_ref())
+                .and_then(ProviderResponseObservation::turn_state_bytes),
             provider_metadata_json,
             diagnostic_trace_json: self.trace.snapshot().map(|value| value.to_string()),
             error: None,
@@ -1673,6 +1678,11 @@ where
                 .and_then(|current| current.response_observation.as_ref())
                 .and_then(ProviderResponseObservation::upstream_response_model)
                 .map(str::to_owned),
+            turn_state_bytes: self
+                .current
+                .as_ref()
+                .and_then(|current| current.response_observation.as_ref())
+                .and_then(ProviderResponseObservation::turn_state_bytes),
             provider_metadata_json,
             diagnostic_trace_json: self.trace.snapshot().map(|value| value.to_string()),
             error: Some(finalization.error),

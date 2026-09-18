@@ -79,6 +79,7 @@ export interface UsageListRecord {
   requestedModel: string | null
   upstreamModel: string | null
   upstreamResponseModel: string | null
+  turnStateBytes: number | null
   serviceTier: string | null
   clientTransport: string
   upstreamTransport: string | null
@@ -112,6 +113,7 @@ export interface UsageRecord {
   requestedModel: string | null
   upstreamModel: string | null
   upstreamResponseModel: string | null
+  turnStateBytes: number | null
   serviceTier: string | null
   statusCode: number | null
   clientTransport: string

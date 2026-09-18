@@ -283,6 +283,7 @@ pub struct ModelRequestFinalization {
     pub websocket_pool: Option<String>,
     pub service_tier: Option<String>,
     pub upstream_response_model: Option<String>,
+    pub turn_state_bytes: Option<i64>,
     pub provider_metadata_json: Option<Value>,
     pub diagnostic_trace_json: Option<Value>,
     pub error_kind: Option<String>,
@@ -353,6 +354,11 @@ impl ModelRequestFinalization {
             if model.len() > 256 || model.chars().any(char::is_control) {
                 return Err(invalid("upstream response model is invalid"));
             }
+        }
+        if let Some(bytes) = self.turn_state_bytes
+            && !(1..=8192).contains(&bytes)
+        {
+            return Err(invalid("turn_state_bytes must be between 1 and 8192"));
         }
         if self
             .provider_metadata_json
@@ -743,7 +749,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_connection_exit_reason = $45,
                  upstream_connection_age_ms = $46,
                  upstream_connection_idle_ms = $47, diagnostic_trace_json = $48,
-                 upstream_response_model = $49
+                 upstream_response_model = $49, turn_state_bytes = $50
              where id = $1 and outcome = 'running'
              returning id, client_api_key_ref, continuation_affinity_hash,
                        continuation_requested, provider_kind, upstream_transport,
@@ -936,6 +942,7 @@ impl ModelRequestRepository for PgExecutionStore {
         )?)
         .bind(finalization.diagnostic_trace_json.map(sqlx::types::Json))
         .bind(finalization.upstream_response_model)
+        .bind(finalization.turn_state_bytes)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -1233,6 +1240,7 @@ impl ExecutionStore for PgExecutionStore {
                 websocket_pool: finalization.websocket_pool,
                 service_tier: finalization.service_tier,
                 upstream_response_model: finalization.upstream_response_model,
+                turn_state_bytes: finalization.turn_state_bytes.map(i64::from),
                 provider_metadata_json,
                 diagnostic_trace_json: finalization
                     .diagnostic_trace_json

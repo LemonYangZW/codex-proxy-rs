@@ -13,6 +13,9 @@ use crate::upstream::OpaqueUpstreamValue;
 use crate::upstream::UpstreamTransport;
 use crate::validation::{IdentifierError, validate_text};
 
+/// turn-state 密文长度的持久化上界；正常令牌在数百字节量级，超界值不落库。
+const MAX_TURN_STATE_BYTES: u32 = 8192;
+
 /// 一次响应的稳定元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseMeta {
@@ -531,6 +534,7 @@ pub struct ProviderResponseObservation {
     request_id: Option<OpaqueUpstreamValue>,
     service_tier: Option<String>,
     upstream_response_model: Option<String>,
+    turn_state_bytes: Option<u32>,
     timings: ProviderResponseTimings,
     client_headers: Vec<ProviderResponseHeader>,
     provider_metadata: Option<ProviderResponseMetadata>,
@@ -547,6 +551,7 @@ impl ProviderResponseObservation {
             request_id: None,
             service_tier: None,
             upstream_response_model: None,
+            turn_state_bytes: None,
             timings: ProviderResponseTimings::default(),
             client_headers: Vec::new(),
             provider_metadata: None,
@@ -612,9 +617,23 @@ impl ProviderResponseObservation {
         self
     }
 
+    /// 记录 Provider 从上游 turn-state 令牌解出的密文字节数；语义解释留在展示层。
+    #[must_use]
+    pub fn with_turn_state_bytes_if_valid(mut self, bytes: u32) -> Self {
+        if (1..=MAX_TURN_STATE_BYTES).contains(&bytes) {
+            self.turn_state_bytes = Some(bytes);
+        }
+        self
+    }
+
     #[must_use]
     pub fn upstream_response_model(&self) -> Option<&str> {
         self.upstream_response_model.as_deref()
+    }
+
+    #[must_use]
+    pub const fn turn_state_bytes(&self) -> Option<u32> {
+        self.turn_state_bytes
     }
 
     #[must_use]

@@ -101,6 +101,7 @@ fn usage_record() -> UsageListRecord {
         upstream_model_id: Some("private-sentinel".to_owned()),
         upstream_transport: Some("websocket".to_owned()),
         upstream_response_model: Some("private-sentinel".to_owned()),
+        turn_state_bytes: None,
         service_tier: Some("private-sentinel".to_owned()),
         input_tokens: Some(1000),
         output_tokens: Some(100),

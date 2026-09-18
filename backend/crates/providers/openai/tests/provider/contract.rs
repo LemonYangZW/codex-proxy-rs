@@ -3,7 +3,10 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
@@ -3638,6 +3641,178 @@ async fn websocket_turn_state_metadata_is_exposed_through_response_observation()
     server.await.expect("WebSocket server");
 
     assert!(observed_turn_state);
+}
+
+#[tokio::test]
+async fn websocket_turn_state_token_is_decoded_into_response_observation_facts() {
+    // 20 个密文字节加 1 个版本字节；时间戳 2026-09-17T00:00:00Z，只验证解码口径。
+    let turn_state = URL_SAFE_NO_PAD.encode(
+        [
+            vec![0x02],
+            1_789_603_200_u64.to_be_bytes().to_vec(),
+            vec![0u8; 20],
+        ]
+        .concat(),
+    );
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("WebSocket request")
+            .expect("valid WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.metadata",
+                    "headers": {"x-codex-turn-state": [turn_state]}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send response metadata");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_websocket_turn_state_facts",
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send completed response");
+        websocket.close(None).await.expect("close WebSocket");
+    });
+
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_websocket_turn_state_facts", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket provider stream");
+    let mut observed = None;
+    let mut metadata = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("provider event");
+        if let Some(observation) = event.response_observation() {
+            observed = observation.turn_state_bytes();
+            metadata = observation
+                .provider_metadata()
+                .and_then(|metadata| serde_json::from_str::<Value>(metadata.as_json()).ok());
+        }
+        if event
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)))
+        {
+            break;
+        }
+    }
+    server.await.expect("WebSocket server");
+
+    assert_eq!(observed, Some(29));
+    let metadata = metadata.expect("OpenAI provider metadata JSON");
+    assert_eq!(metadata["turnStateVersion"], "0x02");
+    assert_eq!(metadata["turnStateBytes"], 29);
+    assert_eq!(metadata["turnStateIssuedAtUnix"], 1_789_603_200_i64);
+    assert_eq!(metadata["turnStateIssuedAt"], "2026-09-17T00:00:00Z");
+}
+
+#[tokio::test]
+async fn turn_state_observation_accepts_padded_and_rejects_non_token_values() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let padded = STANDARD.encode(
+        [
+            vec![0x01],
+            1_789_603_200_u64.to_be_bytes().to_vec(),
+            vec![0u8; 20],
+        ]
+        .concat(),
+    );
+    // Fernet 时间戳是签名时刻，落在 2020 年之前只可能是随机字节碰巧撞上版本字节。
+    let stale_timestamp = URL_SAFE_NO_PAD.encode(
+        [
+            vec![0x80],
+            946_684_800_u64.to_be_bytes().to_vec(),
+            vec![0u8; 20],
+        ]
+        .concat(),
+    );
+    assert!(padded.contains('='), "fixture must carry padding");
+    let mut observations = Vec::new();
+    for header in [
+        padded.as_str(),
+        "not-a-turn-state",
+        stale_timestamp.as_str(),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("x-codex-turn-state", header)
+                    .set_body_string(concat!(
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_shapes\",\"model\":\"gpt-5.4\"}}\n\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_shapes\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                    )),
+            )
+            .mount(&server)
+            .await;
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_turn_state_shapes", CancellationToken::new()),
+            )
+            .await
+            .expect("prepare provider stream");
+        let mut observed_last = None;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("provider event");
+            if let Some(observation) = event.response_observation() {
+                // 同一次请求会产出初始与终态两份观测，取最后一份作为本轮结果。
+                observed_last = observation.turn_state_bytes();
+            }
+            if event
+                .canonical_facts()
+                .iter()
+                .any(|event| matches!(event, GatewayEvent::Completed(_)))
+            {
+                break;
+            }
+        }
+        observations.push(observed_last);
+    }
+
+    // padding 变体按同一口径解码；无法解码或时间戳不可信的值不产生长度事实。
+    assert_eq!(observations, vec![Some(29), None, None]);
 }
 
 #[tokio::test]

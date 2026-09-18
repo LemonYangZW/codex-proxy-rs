@@ -440,6 +440,7 @@ pub(crate) fn admin_usage_list_record(
         upstream_model_id: record.upstream_model_id,
         upstream_transport: record.upstream_transport,
         upstream_response_model: record.upstream_response_model,
+        turn_state_bytes: record.turn_state_bytes,
         service_tier: record.service_tier,
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
@@ -517,6 +518,7 @@ pub(crate) fn admin_usage_record(
         http_version: record.http_version,
         websocket_pool: record.websocket_pool,
         upstream_response_model: record.upstream_response_model,
+        turn_state_bytes: record.turn_state_bytes,
         service_tier: record.service_tier,
         provider_metadata_json: record.provider_metadata_json,
         attempt_count: record.attempt_count,
@@ -767,6 +769,7 @@ pub(crate) fn usage_list_record_from_row(
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,
         upstream_response_model: get(row, "upstream_response_model")?,
+        turn_state_bytes: optional_unsigned(row, "turn_state_bytes")?,
         service_tier: get(row, "service_tier")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
@@ -829,6 +832,7 @@ pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<
         http_version: get(row, "http_version")?,
         websocket_pool: get(row, "websocket_pool")?,
         upstream_response_model: get(row, "upstream_response_model")?,
+        turn_state_bytes: optional_unsigned(row, "turn_state_bytes")?,
         service_tier: get(row, "service_tier")?,
         provider_metadata_json: get::<Option<serde_json::Value>>(row, "provider_observation_json")?
             .map(|value| serde_json::to_string(&value))

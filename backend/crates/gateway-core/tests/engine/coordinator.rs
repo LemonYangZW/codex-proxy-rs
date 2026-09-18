@@ -74,6 +74,7 @@ struct FinalState {
     websocket_pool: Option<String>,
     service_tier: Option<String>,
     upstream_response_model: Option<String>,
+    turn_state_bytes: Option<u32>,
     upstream_request_id: Option<String>,
     upstream_status_code: Option<u16>,
     transport_decision_wait_ms: Option<u64>,
@@ -241,6 +242,7 @@ impl ExecutionStore for FakeStore {
                 websocket_pool: finalization.websocket_pool,
                 service_tier: finalization.service_tier,
                 upstream_response_model: finalization.upstream_response_model,
+                turn_state_bytes: finalization.turn_state_bytes,
                 upstream_request_id: finalization.upstream_request_id,
                 upstream_status_code: finalization.upstream_status_code,
                 transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
@@ -1106,6 +1108,7 @@ fn response_observation_is_persisted_but_never_delivered() {
     .with_status_code(200)
     .with_request_id(OpaqueUpstreamValue::new("upstream-observed"))
     .with_upstream_response_model_if_valid("gpt-returned")
+    .with_turn_state_bytes_if_valid(308)
     .try_with_service_tier("priority")
     .expect("service tier")
     .with_timings(ProviderResponseTimings {
@@ -1149,6 +1152,7 @@ fn response_observation_is_persisted_but_never_delivered() {
         finalization.upstream_response_model.as_deref(),
         Some("gpt-returned")
     );
+    assert_eq!(finalization.turn_state_bytes, Some(308));
     assert_eq!(
         finalization.upstream_request_id.as_deref(),
         Some("upstream-observed")
@@ -1428,6 +1432,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     let state = store.state.lock().expect("store lock");
     let finalization = &state.finalizations[0];
     assert_eq!(finalization.upstream_response_model, None);
+    assert_eq!(finalization.turn_state_bytes, None);
     let trace: Value =
         serde_json::from_str(finalization.diagnostic_trace_json.as_deref().unwrap()).unwrap();
     let events = trace["events"].as_array().unwrap();

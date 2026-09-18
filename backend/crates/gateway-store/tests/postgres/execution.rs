@@ -528,6 +528,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         http_version: Some("HTTP/2".to_owned()),
         websocket_pool: None,
         upstream_response_model: None,
+        turn_state_bytes: None,
         service_tier: None,
         provider_metadata_json: None,
         error: None,
@@ -570,6 +571,54 @@ async fn core_adapter_persists_opaque_response_ids_as_bytes() {
     .expect("load opaque response IDs");
     assert_eq!(persisted.0.as_deref(), Some(response_id.as_bytes()));
     assert_eq!(persisted.1.as_deref(), Some(response_id.as_bytes()));
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_persists_turn_state_bytes_fact() {
+    let Some(database) = TestDatabase::create("execution_turn_state_bytes").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_turn_state_bytes")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_turn_state_bytes");
+    finalization.turn_state_bytes = Some(308);
+
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist turn-state length fact");
+
+    let persisted: Option<i64> = sqlx::query_scalar(
+        "select turn_state_bytes from model_requests where id = 'req_turn_state_bytes'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load turn-state length fact");
+    assert_eq!(persisted, Some(308));
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_rejects_out_of_range_turn_state_bytes() {
+    let Some(database) = TestDatabase::create("execution_turn_state_range").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_turn_state_range")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_turn_state_range");
+    finalization.turn_state_bytes = Some(8_193);
+
+    assert!(
+        ExecutionStore::finalize_model_request(&store, finalization)
+            .await
+            .is_err()
+    );
 
     database.close().await;
 }
@@ -1265,6 +1314,7 @@ pub(super) fn early_failure(request: &CoreNewModelRequest) -> CoreModelRequestFi
         http_version: None,
         websocket_pool: None,
         upstream_response_model: None,
+        turn_state_bytes: None,
         service_tier: None,
         provider_metadata_json: None,
         diagnostic_trace_json: trace.snapshot().map(|value| value.to_string()),
