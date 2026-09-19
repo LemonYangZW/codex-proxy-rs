@@ -64,7 +64,7 @@ services:
     logging: *json-logging
 
   codex-proxy-rs:
-    image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
+    image: ${CPR_IMAGE:-ghcr.io/lemonyangzw/codex-proxy-rs:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile

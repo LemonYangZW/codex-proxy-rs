@@ -46,6 +46,7 @@ jobs:
       previous_tag: ${{ steps.version.outputs.previous_tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       build_type: ${{ steps.version.outputs.build_type }}
+      image_name: ${{ steps.image.outputs.name }}
 
     steps:
       - name: Checkout
@@ -53,6 +54,13 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
+
+      - name: Resolve image name
+        # Docker/GHCR 镜像名必须全小写；github.repository 保留 fork 的原始大小写，
+        # 这里统一转小写后供所有需要拼接镜像地址的 job 使用。
+        id: image
+        shell: bash
+        run: echo "name=$(tr '[:upper:]' '[:lower:]' <<< '${{ github.repository }}')" >> "$GITHUB_OUTPUT"
 
       - name: Load approved experimental draft
         if: inputs.draft_release_id != ''
@@ -373,6 +381,7 @@ jobs:
           VERSION: ${{ needs.release-info.outputs.version }}
           DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
           BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
+          IMAGE_NAME: ${{ needs.release-info.outputs.image_name }}
         run: |
           set -euo pipefail
           ruby <<'RUBY' > release-platforms.json
@@ -507,6 +516,7 @@ jobs:
     env:
       TRIVY_QUIET: 'true'
       TRIVY_SKIP_VERSION_CHECK: 'true'
+      IMAGE_NAME: ${{ needs.release-info.outputs.image_name }}
 
     steps:
       - name: Checkout
@@ -622,6 +632,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    env:
+      IMAGE_NAME: ${{ needs.release-info.outputs.image_name }}
 
     steps:
       - name: Checkout
