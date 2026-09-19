@@ -22,7 +22,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: zyycn/codex-proxy-rs
+  # 动态解析为当前触发仓库的 owner/repo，个人 fork 运行时自动推送到自己的 GHCR 命名空间，
+  # 不需要 upstream 仓库的 packages 写权限，也不用为个人分支硬编码仓库名。
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   release-info:
@@ -582,7 +584,7 @@ jobs:
             org.opencontainers.image.title=Codex Proxy RS
             org.opencontainers.image.version=${{ needs.release-info.outputs.version }}
             org.opencontainers.image.revision=${{ needs.release-info.outputs.git_sha }}
-            org.opencontainers.image.source=https://github.com/zyycn/codex-proxy-rs
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}-${{ matrix.arch }}
 
       - name: Verify exact app image digest
