@@ -356,8 +356,8 @@ impl ObservabilityService for DefaultObservabilityService {
                 let non_completion_rate =
                     rate_or_zero(item.non_completion_count, item.request_count);
                 let retry_rate = rate_or_zero(item.retry_count, item.request_count);
-                let turn_state_missing_rate = 1.0
-                    - rate_or_zero(item.turn_state_present_count, item.request_count);
+                let turn_state_missing_rate =
+                    1.0 - rate_or_zero(item.turn_state_present_count, item.request_count);
                 let impact_score = diagnostic_impact_score(
                     item.request_count,
                     total_requests,
