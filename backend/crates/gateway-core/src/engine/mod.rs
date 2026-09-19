@@ -315,6 +315,8 @@ impl ContinuationAttempt {
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
     session_keepalive_enabled: bool,
+    pricing: Arc<crate::metering::PricingOverrides>,
+    request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
@@ -328,6 +330,21 @@ impl RequestAttemptContext {
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
+    #[must_use]
+    pub fn with_request_profile(
+        mut self,
+        profile: Option<crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profile = profile;
         self
     }
 
@@ -351,6 +368,8 @@ impl RequestAttemptContext {
         Self {
             request_id,
             client_api_key_ref,
+            request_profile: None,
+            pricing: Arc::default(),
             disable_fast: false,
             session_keepalive_enabled: false,
             request_location: None,
@@ -415,6 +434,17 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn pricing(&self) -> &crate::metering::PricingOverrides {
+        &self.request.pricing
+    }
+
+    /// 本次逻辑请求首次解析的 Provider 身份，换号及传输重试保持不变。
+    #[must_use]
+    pub const fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {
+        self.request.request_profile.as_ref()
+    }
+
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.request.disable_fast

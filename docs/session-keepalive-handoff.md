@@ -12,7 +12,7 @@
 | 重写诊断与脱敏 | `backend/crates/providers/openai/src/session_manager/diagnostics.rs` |
 | 共用测试请求构造 | `backend/crates/providers/openai/src/transport/request.rs` |
 | 动态代理隔离与测试准入 | Store 的 `postgres/proxies.rs`、`runtime_settings.rs` |
-| 持久化 | `backend/migrations/0016_session_keepalive.sql` |
+| 持久化 | `backend/migrations/0018_session_keepalive.sql` |
 | 设置页风险确认 | `frontend/src/views/settings/components/SessionKeepaliveCard.vue` |
 | 动态代理页面 | `frontend/src/views/proxies/` |
 | 账户模型选择与刷新 | `frontend/src/views/accounts/components/AccountSessionModelsField.vue`、`AccountSessionStateModal.vue` |

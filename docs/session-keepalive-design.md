@@ -45,7 +45,7 @@ flowchart LR
 | `enable_session_keepalive: bool` | 账号；API `enableSessionKeepalive` | 默认 false；省略或 null 保留，false 显式关闭 |
 | `session_keepalive_models: Vec<String>` | 账号；API `sessionKeepaliveModels` | 默认两个模型；1～32 个不重复 ID，每个 1～128 字节，无首尾空白或控制字符；省略或 null 保留 |
 
-迁移 `0016_session_keepalive.sql` 增加全局与账号开关、模型选择和代理角色，默认模型为 `gpt-5.6-sol`、`gpt-6-astra`。迁移后全局仍关闭，需要在代理管理中保存并测试动态代理，再确认风险启用。代理必须经过统一 URL 规范化，避免复制未经规范化的地址而绕过业务绑定隔离。
+迁移 `0018_session_keepalive.sql` 增加全局与账号开关、模型选择和代理角色，默认模型为 `gpt-5.6-sol`、`gpt-6-astra`。迁移后全局仍关闭，需要在代理管理中保存并测试动态代理，再确认风险启用。代理必须经过统一 URL 规范化，避免复制未经规范化的地址而绕过业务绑定隔离。
 
 代理地址变化会清除测试结果。启用检查与代理变更在事务中串行化；运行时每次发送与写回均检查当前动态代理是否仍有效。普通代理测试沿用原有诊断语义，只有动态代理把测试成功作为重写准入条件。
 
