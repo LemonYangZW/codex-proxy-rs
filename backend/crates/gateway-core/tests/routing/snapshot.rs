@@ -540,10 +540,7 @@ fn disable_fast_uses_only_bound_groups_without_changing_account_scope() {
                         )],
                         vec![
                             SnapshotAccountGroupMemberFacts::new(group_id, account_id.clone()),
-                            SnapshotAccountGroupMemberFacts::new(
-                                open_group_id,
-                                account_id.clone(),
-                            ),
+                            SnapshotAccountGroupMemberFacts::new(open_group_id, account_id.clone()),
                         ],
                     );
                     let snapshot = block_on(

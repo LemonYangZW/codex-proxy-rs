@@ -175,7 +175,6 @@ watch(section, (value) => {
           />
         </template>
 
-
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
           <BaseCard title="客户端身份" description="配置网关向上游声明的客户端类型、版本与请求头">
