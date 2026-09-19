@@ -80,12 +80,13 @@ async fn disabled_accounts_other_models_and_missing_proxy_never_refresh_or_overr
 #[tokio::test]
 async fn partial_failure_keeps_previous_state_without_extending_its_expiry() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
     for model in SESSION_KEEPALIVE_MODELS {
         mock_model(&proxy, "acct_a", model, success("old-state")).await;
     }
     let id = ProviderAccountId::new("acct_a").unwrap();
     manager.refresh(&id).await.unwrap();
+    policy.tickets.near_expiry();
     proxy.reset().await;
     mock_model(&proxy, "acct_a", "gpt-5.6-sol", ResponseTemplate::new(500)).await;
     mock_model(&proxy, "acct_a", "gpt-6-astra", success("new-state")).await;
@@ -229,9 +230,9 @@ async fn rate_limit_is_per_model_and_does_not_block_the_other_model() {
 
     // 手动取消也不应重置冷却。
     let pending = spawn_refresh(&manager, &id);
-    wait_for_requests(&proxy, 4).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 4);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 3);
     assert!(!pending.is_finished());
     pending.abort();
     assert!(pending.await.unwrap_err().is_cancelled());
@@ -245,11 +246,11 @@ async fn rate_limit_is_per_model_and_does_not_block_the_other_model() {
     }
     let result = manager.refresh(&id).await.unwrap();
     assert!(result.models.iter().all(|model| model.error.is_none()));
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 2);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn missing_state_or_failed_sse_completion_never_creates_cache_entries() {
+async fn missing_header_is_rejected_but_valid_header_does_not_wait_for_sse_completion() {
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
     mock_model(&proxy, "acct_a", "gpt-5.6-sol", ResponseTemplate::new(200)).await;
@@ -276,7 +277,7 @@ async fn missing_state_or_failed_sse_completion_never_creates_cache_entries() {
     manager
         .rewrite(&store.account("acct_a").unwrap(), &mut req)
         .await;
-    assert_eq!(req.turn_state.as_deref(), Some("client-state"));
+    assert_eq!(req.turn_state.as_deref(), Some(state("unusable").as_str()));
 }
 
 #[tokio::test]
@@ -358,8 +359,8 @@ async fn rewritten_business_http_uses_original_proxy_and_never_oam_pool() {
 }
 
 #[tokio::test]
-async fn credential_revision_change_prevents_reusing_previous_state() {
-    use gateway_core::account::ProviderAccount;
+async fn actual_credential_rotation_prevents_reusing_previous_state() {
+    use provider_openai::credential::CodexCredentialData;
     let proxy = MockServer::start().await;
     let (store, _, manager) = fixture(Some(&proxy.uri())).await;
     for model in SESSION_KEEPALIVE_MODELS {
@@ -368,37 +369,95 @@ async fn credential_revision_change_prevents_reusing_previous_state() {
     let id = ProviderAccountId::new("acct_a").unwrap();
     manager.refresh(&id).await.unwrap();
     let current = store.account("acct_a").unwrap();
-    let rotated = ProviderAccount::new(
-        id,
-        current.provider().clone(),
-        current.name().to_owned(),
-        current.upstream_user_id().map(str::to_owned),
-        "oauth".to_owned(),
-        current.revision().next().unwrap(),
-        current.access_token_expires_at(),
-    )
-    .with_session_keepalive(true)
-    .with_session_keepalive_models(vec!["gpt-5.6-sol".to_owned(), "gpt-6-astra".to_owned()])
-    .with_account_facts(
-        true,
-        current.credential_state(),
-        current.quota(),
-        None,
-        None,
-    );
+    assert!(manager.available(&current, "gpt-6-astra").await);
+    let repository = store.repository();
+    let mut data = repository.load_complete_data(&current).await.unwrap();
+    let CodexCredentialData::OAuth(ref mut oauth) = data else {
+        panic!("OAuth fixture");
+    };
+    oauth.access_token = "rotated-token".to_owned();
+    repository
+        .compare_and_swap_data(&current, data)
+        .await
+        .unwrap();
+    let rotated = store.account("acct_a").unwrap();
+    assert!(!manager.available(&rotated, "gpt-6-astra").await);
     let mut req = request("gpt-6-astra");
-    manager.rewrite(&current, &mut req).await;
-    assert_eq!(
-        req.turn_state.as_deref(),
-        Some(state("old-credential-state").as_str())
-    );
-    let mut req = request("gpt-6-astra");
-    manager.rewrite(&rotated, &mut req).await;
+    assert!(!manager.rewrite(&rotated, &mut req).await);
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
 }
 
+#[tokio::test]
+async fn cookie_capture_preserves_tickets_expiry_and_success_pruning_after_restart() {
+    let proxy = MockServer::start().await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("retained")).await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let before = manager.refresh(&id).await.unwrap();
+    let previous = store.account("acct_a").unwrap();
+    capture_cookie(&store).await;
+    let current = store.account("acct_a").unwrap();
+    assert_ne!(previous.revision(), current.revision());
+    drop(manager);
+    let manager = SessionManager::new(
+        store.repository(),
+        policy.clone(),
+        wire_profile(),
+        "http://upstream.invalid/backend-api".to_owned(),
+        Some(policy.tickets.clone()),
+    );
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(manager.available(&current, model).await);
+        let mut req = request(model);
+        assert!(manager.rewrite(&current, &mut req).await);
+        assert_eq!(req.turn_state.as_deref(), Some(state("retained").as_str()));
+    }
+    let after = manager.refresh(&id).await.unwrap();
+    for (old, new) in before.models.iter().zip(&after.models) {
+        assert_eq!(old.expire_at, new.expire_at);
+        assert!(new.error.is_none());
+    }
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn cookie_capture_during_probe_does_not_discard_success() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(
+            &proxy,
+            "acct_a",
+            model,
+            success("inflight").set_delay(Duration::from_millis(250)),
+        )
+        .await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.refresh(&id).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while proxy.received_requests().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    capture_cookie(&store).await;
+    let result = pending.await.unwrap().unwrap();
+    assert!(result.models.iter().all(|item| item.error.is_none()));
+    let account = store.account("acct_a").unwrap();
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(manager.available(&account, model).await);
+    }
+}
+
 #[tokio::test(start_paused = true)]
-async fn worker_waits_between_fifty_three_and_fifty_five_minutes_and_cancels_sleep() {
+async fn worker_uses_configured_scan_interval_and_cancels_sleep() {
     let (_, policy, manager) = fixture(None).await;
     let cancellation = CancellationToken::new();
     let task = {
@@ -407,10 +466,10 @@ async fn worker_waits_between_fifty_three_and_fifty_five_minutes_and_cancels_sle
     };
     tokio::task::yield_now().await;
     assert_eq!(policy.reads.load(Ordering::SeqCst), 1);
-    tokio::time::advance(Duration::from_secs(3179)).await;
+    tokio::time::advance(Duration::from_millis(999)).await;
     tokio::task::yield_now().await;
     assert_eq!(policy.reads.load(Ordering::SeqCst), 1);
-    tokio::time::advance(Duration::from_secs(122)).await;
+    tokio::time::advance(Duration::from_millis(2)).await;
     tokio::task::yield_now().await;
     assert_eq!(policy.reads.load(Ordering::SeqCst), 2);
     cancellation.cancel();
@@ -499,10 +558,18 @@ async fn wait_for_state(
 }
 
 #[tokio::test]
-async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_models() {
+async fn first_three_rounds_are_single_then_configured_concurrency_prunes_successful_models() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    mock_model(&proxy, "acct_a", "gpt-6-astra", success("early")).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
+    mock_model(
+        &proxy,
+        "acct_a",
+        "gpt-6-astra",
+        success("early").set_delay(Duration::from_millis(100)),
+    )
+    .await;
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&attempts);
     Mock::given(method("POST"))
@@ -510,10 +577,9 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
         .respond_with(move |_: &wiremock::Request| {
             let mut attempts = observed.lock().unwrap();
             attempts.push(std::time::Instant::now());
-            // 七轮全部失败，第八轮恢复，验证前三轮单探针且后续始终最多三个。
             match attempts.len() {
-                1 => response_with_state(&format!("{}=", "A".repeat(311))),
-                2..=15 => ResponseTemplate::new(503),
+                1 => response_with_state(&"A".repeat(312)),
+                2..=9 => ResponseTemplate::new(503),
                 _ => success("recovered").set_delay(Duration::from_millis(100)),
             }
         })
@@ -523,7 +589,7 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
     let pending = spawn_refresh(&manager, &id);
     wait_for_state(&manager, &store, "gpt-6-astra", "early").await;
     assert!(!pending.is_finished());
-    let result = tokio::time::timeout(Duration::from_secs(40), pending)
+    let result = tokio::time::timeout(Duration::from_secs(26), pending)
         .await
         .unwrap()
         .unwrap()
@@ -532,28 +598,66 @@ async fn retries_follow_three_single_rounds_then_threes_and_prune_successful_mod
     wait_for_state(&manager, &store, "gpt-5.6-sol", "recovered").await;
     {
         let times = attempts.lock().unwrap();
-        assert_eq!(times.len(), 18);
-        assert!(times[1].duration_since(times[0]) >= Duration::from_secs(2));
-        assert!(times[2].duration_since(times[1]) >= Duration::from_secs(3));
-        for (previous, next) in [(2, 3), (5, 6), (8, 9), (11, 12), (14, 15)] {
-            assert!(times[next].duration_since(times[previous]) >= Duration::from_secs(5));
-        }
-        for start in [3, 6, 9, 12, 15] {
+        assert_eq!(times.len(), 12);
+        assert!(times[1].duration_since(times[0]) >= Duration::from_secs(6));
+        assert!(times[2].duration_since(times[1]) >= Duration::from_secs(6));
+        for start in [3, 6, 9] {
             assert!(times[start + 2].duration_since(times[start]) < Duration::from_secs(1));
+            if start > 0 {
+                assert!(times[start].duration_since(times[start - 1]) >= Duration::from_secs(1));
+            }
         }
     }
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 19);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 13);
+}
+
+#[tokio::test]
+async fn retry_rounds_pick_up_changed_global_concurrency_and_interval() {
+    let proxy = MockServer::start().await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["gpt-5.6-sol".to_owned()]);
+    let times = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&times);
+    Mock::given(method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            observed.lock().unwrap().push(std::time::Instant::now());
+            ResponseTemplate::new(503)
+        })
+        .mount(&proxy)
+        .await;
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = spawn_refresh(&manager, &id);
+    wait_for_requests(&proxy, 1).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(2, 2).unwrap();
+    tokio::time::timeout(Duration::from_secs(26), async {
+        while proxy.received_requests().await.unwrap().len() < 7 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    let times = times.lock().unwrap();
+    assert_eq!(times.len(), 7);
+    assert!(times[1].duration_since(times[0]) >= Duration::from_secs(6));
+    assert!(times[3].duration_since(times[2]) >= Duration::from_secs(6));
+    assert!(times[4].duration_since(times[3]) < Duration::from_secs(1));
+    assert!(times[5].duration_since(times[4]) >= Duration::from_secs(2));
 }
 
 #[tokio::test]
 async fn every_non_292_length_is_rejected_and_previous_cache_is_preserved() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
     for model in SESSION_KEEPALIVE_MODELS {
         mock_model(&proxy, "acct_a", model, success("previous")).await;
     }
     let id = ProviderAccountId::new("acct_a").unwrap();
     manager.refresh(&id).await.unwrap();
+    policy.tickets.near_expiry();
     for length in [0, 291, 293, 312, 8193] {
         proxy.reset().await;
         for model in SESSION_KEEPALIVE_MODELS {
@@ -580,8 +684,10 @@ async fn every_non_292_length_is_rejected_and_previous_cache_is_preserved() {
 #[tokio::test]
 async fn first_success_does_not_wait_for_slower_siblings_or_overwrite_the_winner() {
     let proxy = MockServer::start().await;
-    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
-    mock_model(&proxy, "acct_a", "gpt-6-astra", success("early")).await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_session_models("acct_a", vec!["gpt-5.6-sol".to_owned()]);
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     Mock::given(method("POST"))
@@ -596,7 +702,7 @@ async fn first_success_does_not_wait_for_slower_siblings_or_overwrite_the_winner
         .mount(&proxy)
         .await;
     let id = ProviderAccountId::new("acct_a").unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(12), manager.refresh(&id))
+    let result = tokio::time::timeout(Duration::from_secs(26), manager.refresh(&id))
         .await
         .unwrap()
         .unwrap();
@@ -604,7 +710,7 @@ async fn first_success_does_not_wait_for_slower_siblings_or_overwrite_the_winner
     assert_eq!(calls.load(Ordering::SeqCst), 6);
     tokio::time::sleep(Duration::from_millis(2200)).await;
     wait_for_state(&manager, &store, "gpt-5.6-sol", "winner").await;
-    assert_eq!(proxy.received_requests().await.unwrap().len(), 7);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 6);
 }
 
 #[tokio::test]
@@ -647,7 +753,9 @@ async fn invalid_headers_and_first_wins_close_unfinished_http_responses() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = format!("http://{}", listener.local_addr().unwrap());
-    let (_, _, manager) = fixture(Some(&proxy)).await;
+    let (_, policy, manager) = fixture(Some(&proxy)).await;
+    *policy.rewrite.lock().unwrap() =
+        gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
     let closed = Arc::new(AtomicUsize::new(0));
     let observed_closed = Arc::clone(&closed);
     let accepted = Arc::new(AtomicUsize::new(0));
@@ -657,71 +765,77 @@ async fn invalid_headers_and_first_wins_close_unfinished_http_responses() {
         let mut connections = JoinSet::new();
         loop {
             tokio::select! {
-                connection = listener.accept() => {
-                    let (mut socket, _) = connection.unwrap();
-                    let attempts = Arc::clone(&attempts);
-                    let closed = Arc::clone(&observed_closed);
-                    observed_accepted.fetch_add(1, Ordering::SeqCst);
-                    connections.spawn(async move {
-                        let mut request_bytes = Vec::new();
-                        let mut buffer = [0u8; 4096];
-                        let body = loop {
-                            let read = socket.read(&mut buffer).await.unwrap();
-                            assert!(read > 0);
-                            request_bytes.extend_from_slice(&buffer[..read]);
-                            if let Some(end) = request_bytes.windows(4).position(|part| part == b"\r\n\r\n") {
-                                let headers = std::str::from_utf8(&request_bytes[..end]).unwrap();
-                                let length = headers.lines().find_map(|line| {
-                                    let (name, value) = line.split_once(':')?;
-                                    name.eq_ignore_ascii_case("content-length")
-                                        .then(|| value.trim().parse::<usize>().unwrap())
-                                }).unwrap();
-                                if request_bytes.len() >= end + 4 + length {
-                                    break serde_json::from_slice::<serde_json::Value>(
-                                        &zstd::stream::decode_all(&request_bytes[end + 4..end + 4 + length]).unwrap(),
-                                    ).unwrap();
+                        connection = listener.accept() => {
+                            let (mut socket, _) = connection.unwrap();
+                            let attempts = Arc::clone(&attempts);
+                            *policy.rewrite.lock().unwrap() = gateway_core::provider_ports::SessionRewritePolicy::try_new(3, 1).unwrap();
+            let closed = Arc::clone(&observed_closed);
+                            observed_accepted.fetch_add(1, Ordering::SeqCst);
+                            connections.spawn(async move {
+                                let mut request_bytes = Vec::new();
+                                let mut buffer = [0u8; 4096];
+                                let body = loop {
+                                    let read = socket.read(&mut buffer).await.unwrap();
+                                    assert!(read > 0);
+                                    request_bytes.extend_from_slice(&buffer[..read]);
+                                    if let Some(end) = request_bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                                        let headers = std::str::from_utf8(&request_bytes[..end]).unwrap();
+                                        assert!(headers.lines().next().unwrap().ends_with("HTTP/1.1"));
+                                        assert!(headers.to_ascii_lowercase().contains("connection: close"));
+                                        let length = headers.lines().find_map(|line| {
+                                            let (name, value) = line.split_once(':')?;
+                                            name.eq_ignore_ascii_case("content-length")
+                                                .then(|| value.trim().parse::<usize>().unwrap())
+                                        }).unwrap();
+                                        if request_bytes.len() >= end + 4 + length {
+                                            break serde_json::from_slice::<serde_json::Value>(
+                                                &zstd::stream::decode_all(&request_bytes[end + 4..end + 4 + length]).unwrap(),
+                                            ).unwrap();
+                                        }
+                                    }
+                                };
+                                let attempt = {
+                                    let mut attempts = attempts.lock().unwrap();
+                                    let count = attempts.entry(body["model"].as_str().unwrap().to_owned()).or_default();
+                                    *count += 1;
+                                    *count
+                                };
+                                if attempt == 4 {
+                                    // 等同轮三个请求都进入 HTTP 阶段，再返回首个完整成功。
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    let response = format!(
+                                        "HTTP/1.1 200 OK\r\nx-codex-turn-state: {}\r\nContent-Length: 100000\r\n\r\n",
+                                        state("winner"),
+                                    );
+                                    socket.write_all(response.as_bytes()).await.unwrap();
+                                    match socket.read(&mut buffer).await {
+                                        Ok(0) | Err(_) => { closed.fetch_add(1, Ordering::SeqCst); }
+                                        Ok(_) => panic!("valid Header should close without reading SSE"),
+                                    }
+                                } else {
+                                    // 首轮三个非法长度与后续落败探针都只发 Header，响应体永久悬挂。
+                                    let state = if attempt <= 3 { "A".repeat(312) } else { state("pending") };
+                                    let response = format!(
+                                        "HTTP/1.1 200 OK\r\nx-codex-turn-state: {state}\r\nContent-Length: 100000\r\n\r\n",
+                                    );
+                                    if attempt <= 3 { socket.write_all(response.as_bytes()).await.unwrap(); }
+                                    match socket.read(&mut buffer).await {
+                                        Ok(0) | Err(_) => { closed.fetch_add(1, Ordering::SeqCst); }
+                                        Ok(_) => panic!("unexpected bytes on unfinished response"),
+                                    }
                                 }
-                            }
-                        };
-                        let attempt = {
-                            let mut attempts = attempts.lock().unwrap();
-                            let count = attempts.entry(body["model"].as_str().unwrap().to_owned()).or_default();
-                            *count += 1;
-                            *count
-                        };
-                        if attempt == 4 {
-                            // 等同轮三个请求都进入 HTTP 阶段，再返回首个完整成功。
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            let body = "data: {\"type\":\"response.completed\"}\n\n";
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nx-codex-turn-state: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                                state("winner"), body.len(),
-                            );
-                            socket.write_all(response.as_bytes()).await.unwrap();
-                        } else {
-                            // 前三轮非法长度与后续落败探针都只发 Header，响应体永久悬挂。
-                            let state = if attempt <= 3 { "A".repeat(312) } else { state("pending") };
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nx-codex-turn-state: {state}\r\nContent-Length: 100000\r\n\r\n",
-                            );
-                            socket.write_all(response.as_bytes()).await.unwrap();
-                            match socket.read(&mut buffer).await {
-                                Ok(0) | Err(_) => { closed.fetch_add(1, Ordering::SeqCst); }
-                                Ok(_) => panic!("unexpected bytes on unfinished response"),
-                            }
+                            });
                         }
-                    });
-                }
-                Some(result) = connections.join_next(), if !connections.is_empty() => {
-                    result.unwrap();
-                }
-            }
+                        Some(result) = connections.join_next(), if !connections.is_empty() => {
+                            result.unwrap();
+                        }
+                    }
         }
     });
     let id = ProviderAccountId::new("acct_a").unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(13), manager.refresh(&id)).await;
+    let result = tokio::time::timeout(Duration::from_secs(26), manager.refresh(&id)).await;
     let disconnected = tokio::time::timeout(Duration::from_secs(1), async {
-        while closed.load(Ordering::SeqCst) < 10 {
+        while closed.load(Ordering::SeqCst) < 12 {
             tokio::task::yield_now().await;
         }
     })
@@ -770,4 +884,298 @@ async fn manual_progress_reports_cached_success_while_another_model_keeps_retryi
     assert!(receiver.recv().await.is_none());
     // 前端断开进度流后，已经成功写入的缓存仍可服务业务。
     wait_for_state(&manager, &store, "gpt-6-astra", "visible").await;
+}
+
+#[tokio::test]
+async fn tickets_restore_after_restart_skip_fresh_refresh_near_expiry_and_fail_closed() {
+    let proxy = MockServer::start().await;
+    let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
+    let account = store.account("acct_a").unwrap();
+    assert!(!manager.available(&account, "gpt-5.6-sol").await);
+    assert!(manager.available(&account, "unmanaged-model").await);
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("durable")).await;
+    }
+    manager.refresh(account.id()).await.unwrap();
+    assert!(manager.available(&account, "gpt-5.6-sol").await);
+    let restored = SessionManager::new(
+        store.repository(),
+        policy.clone(),
+        wire_profile(),
+        "http://upstream.invalid/backend-api".to_owned(),
+        Some(policy.tickets.clone()),
+    );
+    assert!(restored.available(&account, "gpt-5.6-sol").await);
+    restored.refresh(account.id()).await.unwrap();
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 2);
+    policy.tickets.near_expiry();
+    restored.refresh(account.id()).await.unwrap();
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 4);
+    policy.tickets.unavailable.store(true, Ordering::SeqCst);
+    assert!(!restored.available(&account, "gpt-5.6-sol").await);
+    assert!(
+        !restored
+            .rewrite(&account, &mut request("gpt-5.6-sol"))
+            .await
+    );
+    policy.tickets.unavailable.store(false, Ordering::SeqCst);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(3601)).await;
+    assert!(!restored.available(&account, "gpt-5.6-sol").await);
+}
+
+#[tokio::test]
+async fn http_200_exact_length_and_prefix_are_required_without_consuming_body() {
+    for (status, value, valid) in [
+        (200, state("header-only"), true),
+        (201, state("created"), false),
+        (200, "A".repeat(292), false),
+        (200, format!("gAAAAA{}", "A".repeat(306)), false),
+    ] {
+        let proxy = MockServer::start().await;
+        let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+        store.set_session_models("acct_a", vec!["gpt-5.6-sol".to_owned()]);
+        mock_model(
+            &proxy,
+            "acct_a",
+            "gpt-5.6-sol",
+            ResponseTemplate::new(status)
+                .insert_header("x-codex-turn-state", value)
+                .set_body_string("not SSE"),
+        )
+        .await;
+        let pending = spawn_refresh(&manager, &ProviderAccountId::new("acct_a").unwrap());
+        wait_for_requests(&proxy, 1).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            manager
+                .available(&store.account("acct_a").unwrap(), "gpt-5.6-sol")
+                .await,
+            valid
+        );
+        assert_eq!(pending.is_finished(), valid);
+        pending.abort();
+        let _ = pending.await;
+    }
+}
+
+#[tokio::test]
+async fn background_bad_account_does_not_block_other_accounts_or_reprobe_fresh_tickets() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, ResponseTemplate::new(503)).await;
+        mock_model(&proxy, "acct_b", model, success("other-account")).await;
+    }
+    let cancellation = CancellationToken::new();
+    let task = {
+        let manager = manager.clone();
+        let cancel = cancellation.clone();
+        tokio::spawn(async move { manager.run(cancel).await })
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !manager
+            .available(&store.account("acct_b").unwrap(), "gpt-5.6-sol")
+            .await
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(6200)).await;
+    cancellation.cancel();
+    task.await.unwrap().unwrap();
+    let requests = proxy.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.headers.get("authorization").unwrap() == "Bearer acct_b")
+            .count(),
+        2
+    );
+    assert!(
+        requests
+            .iter()
+            .filter(|r| r.headers.get("authorization").unwrap() == "Bearer acct_a")
+            .count()
+            >= 4
+    );
+}
+
+#[tokio::test]
+async fn selector_skips_missing_ticket_and_recovers_only_the_ready_account_model() {
+    use crate::support::{
+        MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    };
+    use gateway_core::{
+        account::AccountFeedbackStats,
+        engine::{AccountAttemptContext, AttemptContext, ModelRequestId, RequestAttemptContext},
+        policy::ClientApiKeyId,
+        routing::{
+            ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount,
+            RuntimeAccountDirectory,
+        },
+    };
+    use provider_openai::credential::{
+        CodexCookiePolicy, CodexCredentialQuotaService, CodexCredentialSelector,
+        SelectCodexCredential,
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        time::SystemTime,
+    };
+    let (store, policy, manager) = fixture(None).await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let quota = Arc::new(CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::new(),
+        provider_openai::OFFICIAL_CODEX_BASE_URL.to_owned(),
+        Arc::new(MemoryCooldownPort::default()),
+        leases.clone(),
+        crate::support::runtime_policy(),
+    ));
+    let selector = CodexCredentialSelector::new(
+        ProviderKind::new("openai").unwrap(),
+        store.repository(),
+        leases,
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(MemorySessionExclusions::default()),
+        quota,
+        Arc::new(AccountFeedbackStats::default()),
+        CodexCookiePolicy::official().unwrap(),
+    )
+    .with_session_manager(manager);
+    let accounts = ["acct_a", "acct_b"]
+        .into_iter()
+        .map(|id| {
+            (
+                ProviderAccountId::new(id).unwrap(),
+                RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(accounts)),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_ticket_test").unwrap(),
+            ClientApiKeyId::new("key_ticket_test").unwrap(),
+        )
+        .with_session_keepalive_enabled(true),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(30),
+        crate::support::account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None).with_account_scope(scope),
+        None,
+        CancellationToken::new(),
+    );
+    let url = url::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let selection = SelectCodexCredential {
+        upstream_model: "gpt-5.6-sol",
+        request_url: &url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    };
+    assert!(selector.select(&selection).await.is_err());
+    let account = store.account("acct_b").unwrap();
+    policy
+        .tickets
+        .store(
+            account.id(),
+            "gpt-5.6-sol",
+            &ProviderSessionTicket {
+                value: state("ready"),
+                credential_revision: account.revision().get(),
+                credential_binding: None,
+                expires_at: Utc::now().timestamp() + 3600,
+            },
+        )
+        .await
+        .unwrap();
+    let lease = selector.select(&selection).await.unwrap();
+    assert_eq!(lease.account_id(), account.id());
+    drop(lease);
+    let other = SelectCodexCredential {
+        upstream_model: "gpt-6-astra",
+        ..selection
+    };
+    assert!(selector.select(&other).await.is_err());
+    policy.tickets.unavailable.store(true, Ordering::SeqCst);
+    assert!(selector.select(&selection).await.is_err());
+}
+
+#[tokio::test]
+async fn legacy_ticket_is_accepted_only_while_its_credential_revision_matches() {
+    let (store, policy, manager) = fixture(None).await;
+    let current = store.account("acct_a").unwrap();
+    let legacy: ProviderSessionTicket = serde_json::from_value(json!({
+        "value": state("legacy"), "credential_revision": current.revision().get(),
+        "expires_at": Utc::now().timestamp() + 3600
+    }))
+    .unwrap();
+    assert!(legacy.credential_binding.is_none());
+    policy
+        .tickets
+        .store(current.id(), "gpt-6-astra", &legacy)
+        .await
+        .unwrap();
+    assert!(manager.available(&current, "gpt-6-astra").await);
+    capture_cookie(&store).await;
+    assert!(
+        !manager
+            .available(&store.account("acct_a").unwrap(), "gpt-6-astra")
+            .await
+    );
+}
+
+#[tokio::test]
+async fn credential_rotation_during_probe_discards_old_identity_result() {
+    use provider_openai::credential::CodexCredentialData;
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(
+            &proxy,
+            "acct_a",
+            model,
+            success("stale").set_delay(Duration::from_millis(250)),
+        )
+        .await;
+    }
+    let id = ProviderAccountId::new("acct_a").unwrap();
+    let pending = {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.refresh(&id).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while proxy.received_requests().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let account = store.account("acct_a").unwrap();
+    let repository = store.repository();
+    let mut data = repository.load_complete_data(&account).await.unwrap();
+    let CodexCredentialData::OAuth(ref mut oauth) = data else {
+        panic!("OAuth fixture");
+    };
+    oauth.access_token = "rotated-during-probe".to_owned();
+    repository
+        .compare_and_swap_data(&account, data)
+        .await
+        .unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert!(result.models.iter().all(|item| item.error.is_some()));
+    for model in SESSION_KEEPALIVE_MODELS {
+        assert!(
+            !manager
+                .available(&store.account("acct_a").unwrap(), model)
+                .await
+        );
+    }
 }

@@ -991,6 +991,8 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             session_keepalive_enabled: false,
+            session_rewrite_concurrency: 3,
+            session_rewrite_retry_interval_seconds: 2,
             openai_client_profile: None,
             request_location_enabled: false,
             request_location: Default::default(),

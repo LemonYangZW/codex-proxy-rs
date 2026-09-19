@@ -62,6 +62,8 @@ const {
   addMapping,
   updateMapping,
   removeMapping,
+  sessionRewriteConcurrencyValue,
+  sessionRewriteRetryIntervalSecondsValue,
   refreshMarginSecondsValue,
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
@@ -155,7 +157,7 @@ watch(section, (value) => {
             v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
             v-model:request-interval-ms="requestIntervalMsValue"
           />
-          <SessionKeepaliveCard v-model="form.sessionKeepaliveEnabled" :disabled="disabled" />
+          <SessionKeepaliveCard v-model="form.sessionKeepaliveEnabled" v-model:concurrency="sessionRewriteConcurrencyValue" v-model:retry-interval-seconds="sessionRewriteRetryIntervalSecondsValue" :disabled="disabled" />
           <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
           <RequestQueueCard
             v-model:max-waiting-per-key="maxWaitingPerKeyValue"
@@ -172,6 +174,7 @@ watch(section, (value) => {
             v-model:adaptive-concurrency="form.accountAutoFreezeAdaptiveConcurrency"
           />
         </template>
+
 
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />

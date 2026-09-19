@@ -37,9 +37,19 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 struct Policy {
     proxy: Mutex<Option<OutboundProxy>>,
+    rewrite: Mutex<gateway_core::provider_ports::SessionRewritePolicy>,
     reads: AtomicUsize,
+    tickets: Arc<MemoryTickets>,
 }
 impl ProviderRuntimePolicyPort for Policy {
+    fn load_session_rewrite_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<gateway_core::provider_ports::SessionRewritePolicy, ProviderStoreError>>
+    {
+        let policy = *self.rewrite.lock().unwrap();
+        Box::pin(async move { Ok(policy) })
+    }
+
     fn load_refresh_policy(
         &self,
     ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
@@ -76,6 +86,10 @@ async fn fixture(
     let policy = Arc::new(Policy {
         proxy: Mutex::new(proxy.map(|url| OutboundProxy::parse(url).unwrap())),
         reads: AtomicUsize::new(0),
+        tickets: Arc::new(MemoryTickets::default()),
+        rewrite: Mutex::new(
+            gateway_core::provider_ports::SessionRewritePolicy::try_new(1, 1).unwrap(),
+        ),
     });
     let profile = wire_profile();
     let manager = Arc::new(SessionManager::new(
@@ -83,6 +97,7 @@ async fn fixture(
         policy.clone(),
         profile,
         "http://upstream.invalid/backend-api".to_owned(),
+        Some(policy.tickets.clone()),
     ));
     (store, policy, manager)
 }
@@ -115,7 +130,7 @@ fn request(model: &str) -> CodexResponsesRequest {
 
 // 合成凭证只用于验证严格长度合同。
 fn state(label: &str) -> String {
-    format!("{label:A<290}==")
+    format!("gAAAAA{label:A<284}==")
 }
 
 fn success(label: &str) -> ResponseTemplate {
@@ -154,4 +169,120 @@ fn model_match(model: &'static str) -> impl wiremock::Match {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         body["model"] == model
     }
+}
+
+use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort};
+#[derive(Default)]
+pub(super) struct MemoryTickets {
+    entries: Mutex<
+        std::collections::HashMap<(String, String), (ProviderSessionTicket, tokio::time::Instant)>,
+    >,
+    unavailable: std::sync::atomic::AtomicBool,
+}
+impl ProviderSessionTicketPort for MemoryTickets {
+    fn load<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionTicket>, ProviderStoreError>> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderStoreError::new(
+                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                    "test cache",
+                ));
+            }
+            Ok(self
+                .entries
+                .lock()
+                .unwrap()
+                .get(&(account.as_str().to_owned(), model.to_owned()))
+                .filter(|(_, deadline)| *deadline > tokio::time::Instant::now())
+                .map(|(ticket, _)| ticket.clone()))
+        })
+    }
+    fn store<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a str,
+        ticket: &'a ProviderSessionTicket,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderStoreError::new(
+                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                    "test cache",
+                ));
+            }
+            self.entries.lock().unwrap().insert(
+                (account.as_str().to_owned(), model.to_owned()),
+                (
+                    ticket.clone(),
+                    tokio::time::Instant::now()
+                        + Duration::from_secs(
+                            (ticket.expires_at - Utc::now().timestamp()).max(0) as u64
+                        ),
+                ),
+            );
+            Ok(())
+        })
+    }
+    fn clear<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.entries
+                .lock()
+                .unwrap()
+                .retain(|(id, _), _| id != account.as_str());
+            Ok(())
+        })
+    }
+}
+impl MemoryTickets {
+    fn near_expiry(&self) {
+        for (ticket, _) in self.entries.lock().unwrap().values_mut() {
+            ticket.expires_at = Utc::now().timestamp() + 599;
+        }
+    }
+}
+
+async fn capture_cookie(store: &Arc<MemoryAccountStore>) {
+    use crate::support::{
+        MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    };
+    use gateway_core::{account::AccountFeedbackStats, routing::ProviderKind};
+    use provider_openai::credential::{
+        CodexCookiePolicy, CodexCredentialQuotaService, CodexCredentialSelector,
+    };
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let quota = Arc::new(CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::new(),
+        provider_openai::OFFICIAL_CODEX_BASE_URL.to_owned(),
+        Arc::new(MemoryCooldownPort::default()),
+        leases.clone(),
+        crate::support::runtime_policy(),
+    ));
+    let selector = CodexCredentialSelector::new(
+        ProviderKind::new("openai").unwrap(),
+        store.repository(),
+        leases,
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(MemorySessionExclusions::default()),
+        quota,
+        Arc::new(AccountFeedbackStats::default()),
+        CodexCookiePolicy::official().unwrap(),
+    );
+    let outcome = selector
+        .capture_response_cookies(
+            &store.account("acct_a").unwrap(),
+            &url::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap(),
+            &["__cf_bm=updated; Path=/; Domain=chatgpt.com; Secure; Max-Age=1800".to_owned()],
+        )
+        .await
+        .unwrap();
+    assert!(outcome.credential_revision.is_some());
 }

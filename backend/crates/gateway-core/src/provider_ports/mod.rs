@@ -17,6 +17,9 @@ use crate::policy::ClientApiKeyId;
 use crate::routing::UpstreamModelId;
 use crate::validation::{IdentifierError, validate_text};
 
+mod session_ticket;
+pub use session_ticket::{ProviderSessionTicket, ProviderSessionTicketPort};
+
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// Provider 可据此决定是否重试，但看不到 SQL、Redis 或秘密原文。
@@ -935,7 +938,57 @@ fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
     ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
 }
 
+/// State 重写的每模型并发数与失败轮次间隔；手动刷新与后台共用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionRewritePolicy {
+    concurrency: u32,
+    retry_interval_seconds: u32,
+}
+
+impl Default for SessionRewritePolicy {
+    fn default() -> Self {
+        Self {
+            concurrency: 3,
+            retry_interval_seconds: 6,
+        }
+    }
+}
+
+impl SessionRewritePolicy {
+    pub fn try_new(
+        concurrency: u32,
+        retry_interval_seconds: u32,
+    ) -> Result<Self, ProviderStoreError> {
+        if !(1..=10).contains(&concurrency) || !(1..=300).contains(&retry_interval_seconds) {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "session rewrite policy",
+            ));
+        }
+        Ok(Self {
+            concurrency,
+            retry_interval_seconds,
+        })
+    }
+
+    #[must_use]
+    pub const fn concurrency(self) -> u32 {
+        self.concurrency
+    }
+
+    #[must_use]
+    pub const fn retry_interval_seconds(self) -> u32 {
+        self.retry_interval_seconds
+    }
+}
+
 pub trait ProviderRuntimePolicyPort: Send + Sync {
+    fn load_session_rewrite_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<SessionRewritePolicy, ProviderStoreError>> {
+        Box::pin(async { Ok(SessionRewritePolicy::default()) })
+    }
+
     /// 独立运维出口；未配置时禁止重写回退到业务代理或直连。
     fn load_session_keepalive_proxy(
         &self,
@@ -1259,6 +1312,7 @@ pub struct ProviderStorePorts {
     cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     oauth_pending: Arc<dyn OAuthPendingFlowPort>,
+    session_tickets: Option<Arc<dyn ProviderSessionTicketPort>>,
 }
 
 impl ProviderStorePorts {
@@ -1289,7 +1343,19 @@ impl ProviderStorePorts {
             cooldowns,
             runtime_policy,
             oauth_pending,
+            session_tickets: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_session_tickets(mut self, tickets: Arc<dyn ProviderSessionTicketPort>) -> Self {
+        self.session_tickets = Some(tickets);
+        self
+    }
+
+    #[must_use]
+    pub fn session_tickets(&self) -> Option<Arc<dyn ProviderSessionTicketPort>> {
+        self.session_tickets.clone()
     }
 
     #[must_use]

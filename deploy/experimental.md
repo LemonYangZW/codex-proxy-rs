@@ -66,10 +66,12 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 ## 数据与回退
 
-本分支只保留一份新增 SQL：`0018_session_keepalive.sql`。稳定版基线 v3.10.0 使用 0001–0015；
+本分支在 v3.10.0 基线之上包含 `0016_session_keepalive.sql`、`0017_session_rewrite_retry_policy.sql`、`0018_turn_state_bytes.sql`、`0019_client_profiles_and_model_pricing.sql`；0017 只增加 State 重写的并发数与重试间隔，已有实验版 0016 数据库可以原地升级。稳定版基线 v3.10.0 使用 0001–0015；
 实验库不能原地降级到稳定版，也不能随意合并主分支未来同编号迁移。
 已经运行过 PR #151 原始 0016–0018 或旧版合并 0016 的源码实例，需要完整备份后重建与目标代码匹配的库，
 并按目标表结构恢复业务数据；不要修改 `_sqlx_migrations` 的 checksum。
+
+State 票据保存在该实验实例的 Redis 中，TTL 为 60 分钟；网关重启可恢复未过期票据，Redis 数据丢失则需要重新获取。启用 State 重写的账号／模型在缺票、过期或 Redis 不可用时暂停承接业务请求；升级后首次获取成功前也适用。请保持 Redis 数据卷与配置命名空间稳定，勿与其他实例混用。
 
 首次试用优先新建空库，通过管理端导入所需账号。回到稳定版时停止实验实例，使用原稳定版实例或其试用前备份。
 需要迁移试用期间新增数据时，单独导出业务数据并核对字段，不直接把实验库备份还原给稳定版。
