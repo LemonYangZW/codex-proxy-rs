@@ -68,6 +68,341 @@ use crate::support::{
 use crate::transport::accept_codex_test_websocket;
 
 #[tokio::test]
+async fn runtime_websocket_preference_should_apply_per_request_and_respect_transport_restrictions()
+{
+    use provider_openai::credential::ApiKeyTransport;
+    // 同一 Provider 在设置切换后采用新偏好；显式 HTTP 与 HTTP-only 账号保持优先级。
+    let choices = [
+        (false, None),
+        (true, None),
+        (true, Some(false)),
+        (false, None),
+        (false, Some(true)),
+    ];
+    for authentication in [
+        None,
+        Some(ApiKeyTransport::PreferWebsocket),
+        Some(ApiKeyTransport::Http),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let store = Arc::new(MemoryAccountStore::default());
+        if let Some(transport) = authentication {
+            store
+                .seed_api_key("acct_provider_contract", base_url.clone(), transport)
+                .await;
+        } else {
+            create_account(&store, "acct_provider_contract").await;
+        }
+        let server = tokio::spawn(async move {
+            for (prefer, explicit) in choices {
+                let use_ws =
+                    authentication != Some(ApiKeyTransport::Http) && explicit.unwrap_or(prefer);
+                let (mut socket, _) = listener.accept().await.unwrap();
+                if use_ws {
+                    let mut websocket = accept_codex_test_websocket(socket).await;
+                    let frame = websocket.next().await.unwrap().unwrap();
+                    let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    assert_eq!(body["type"], "response.create");
+                    websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_preference","model":"gpt-5.4","status":"completed","output":[]}}).to_string().into())).await.unwrap();
+                } else {
+                    let request = capture_http_request(&mut socket).await;
+                    assert!(String::from_utf8_lossy(&request).starts_with("POST "));
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}", CAPTURE_COMPLETED_SSE.len()).as_bytes()).await.unwrap();
+                }
+            }
+        });
+        let provider = provider_with_base_url(&store, base_url);
+        timeout(Duration::from_secs(5), async {
+            for (prefer, explicit) in choices {
+                let mut payload = ProtocolPayload::json_object(
+                    "openai",
+                    json!({"model":"gpt-5.4","input":"hello"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )
+                .unwrap();
+                if let Some(explicit) = explicit {
+                    payload = payload.with_context(Map::from_iter([(
+                        "use_websocket".to_owned(),
+                        json!(explicit),
+                    )]));
+                }
+                let context = AttemptContext::new(
+                    RequestAttemptContext::new(
+                        ModelRequestId::new("req_ws_preference").unwrap(),
+                        ClientApiKeyId::new("key_openai_contract").unwrap(),
+                    )
+                    .with_openai_prefer_websocket(prefer),
+                    NonZeroU32::new(1).unwrap(),
+                    SystemTime::now() + Duration::from_secs(5),
+                    account_policy(),
+                    AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
+                        .with_account_scope(contract_account_scope()),
+                    None,
+                    CancellationToken::new(),
+                );
+                let mut response = provider
+                    .execute(
+                        planned_request(
+                            "openai",
+                            Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                        ),
+                        context,
+                    )
+                    .await
+                    .unwrap();
+                while let Some(event) = response.next().await {
+                    event.expect("selected transport response");
+                }
+            }
+            server.await.unwrap();
+        })
+        .await
+        .expect("运行设置应改变后续请求的真实上游传输");
+    }
+}
+
+#[tokio::test]
+async fn http_requests_without_a_transport_override_should_use_http_for_every_account_type() {
+    for authentication in [
+        None,
+        Some(provider_openai::credential::ApiKeyTransport::Http),
+        Some(provider_openai::credential::ApiKeyTransport::PreferWebsocket),
+    ] {
+        let upstream = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        let response_path = if let Some(transport) = authentication {
+            store
+                .seed_api_key("acct_provider_contract", upstream.uri(), transport)
+                .await;
+            "/responses"
+        } else {
+            create_account(&store, "acct_provider_contract").await;
+            "/codex/responses"
+        };
+        Mock::given(method("POST"))
+            .and(path(response_path))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+            )
+            .expect(2)
+            .mount(&upstream)
+            .await;
+        let provider = provider_with_base_url(&store, upstream.uri());
+        for stream in [false, true] {
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                json!({"model":"gpt-5.4","input":"hello","stream":stream})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+            let mut response = provider
+                .execute(
+                    planned_request(
+                        "openai",
+                        Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                    ),
+                    context("req_default_http", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.metadata().transport().as_str(),
+                "http_sse",
+                "{authentication:?}, stream={stream}"
+            );
+            while let Some(event) = response.next().await {
+                event.expect("HTTP response");
+            }
+        }
+        let requests = upstream.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "HTTP 请求不能额外发起 WS 握手或后台预连接"
+        );
+        upstream.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn explicit_http_should_override_downstream_websocket_for_a_stored_response() {
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        json!({"model":"gpt-5.4","input":"hello","store":true})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap()
+    .with_context(Map::from_iter([
+        (
+            "downstream_websocket_connection_id".to_owned(),
+            json!("ws_explicit_http"),
+        ),
+        ("use_websocket".to_owned(), json!(false)),
+    ]));
+    let mut response = provider_with_base_url(&store, upstream.uri())
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+            ),
+            context("req_explicit_http", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = response.next().await {
+        event.expect("explicit HTTP response");
+    }
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn downstream_websocket_or_explicit_opt_in_should_use_websocket_when_account_allows_it() {
+    for api_key in [false, true] {
+        for downstream_websocket in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let store = Arc::new(MemoryAccountStore::default());
+            if api_key {
+                store
+                    .seed_api_key(
+                        "acct_provider_contract",
+                        base_url.clone(),
+                        provider_openai::credential::ApiKeyTransport::PreferWebsocket,
+                    )
+                    .await;
+            } else {
+                create_account(&store, "acct_provider_contract").await;
+            }
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut websocket = accept_codex_test_websocket(socket).await;
+                let frame = websocket.next().await.unwrap().unwrap();
+                let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                assert_eq!(body["type"], "response.create");
+                assert!(body.get("use_websocket").is_none());
+                websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_transport_ws","model":"gpt-5.4","status":"completed","output":[]}}).to_string().into())).await.unwrap();
+            });
+            // store=true 排除非持久化新链的强制 WS 要求，验证普通请求的默认选择。
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                json!({"model":"gpt-5.4","input":"hello","store":true})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap()
+            .with_context(if downstream_websocket {
+                Map::from_iter([(
+                    "downstream_websocket_connection_id".to_owned(),
+                    json!("ws_default"),
+                )])
+            } else {
+                Map::from_iter([("use_websocket".to_owned(), json!(true))])
+            });
+            let mut response = provider_with_base_url(&store, base_url)
+                .execute(
+                    planned_request(
+                        "openai",
+                        Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                    ),
+                    context("req_selected_ws", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            timeout(Duration::from_secs(5), async {
+                while let Some(event) = response.next().await {
+                    event.expect("WebSocket response");
+                }
+                server.await.unwrap();
+            })
+            .await
+            .expect("WebSocket request should complete");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_existing_session_should_follow_each_requests_downstream_transport() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(socket).await;
+        let websocket_task = tokio::spawn(async move {
+            for index in [0, 2] {
+                let frame = loop {
+                    let frame = websocket.next().await.unwrap().unwrap();
+                    if !frame.is_ping() {
+                        break frame;
+                    }
+                };
+                assert!(
+                    frame.is_text(),
+                    "expected response.create for turn {index}, got {frame:?}"
+                );
+                let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                assert_eq!(body["input"], format!("turn-{index}"));
+                websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":format!("resp_switch_{index}"),"model":"gpt-5.4","status":"completed","output":[]}}).to_string().into())).await.unwrap();
+            }
+        });
+        let (mut http, _) = listener.accept().await.unwrap();
+        let request = capture_http_request(&mut http).await;
+        assert!(String::from_utf8_lossy(&request).starts_with("POST /codex/responses"));
+        http.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}", CAPTURE_COMPLETED_SSE.len()).as_bytes()).await.unwrap();
+        websocket_task.await.unwrap();
+    });
+    let provider = provider_with_base_url(&store, base_url);
+    timeout(Duration::from_secs(5), async {
+        for (index, downstream_websocket) in [true, false, true].into_iter().enumerate() {
+            let mut protocol_context = Map::new();
+            if downstream_websocket {
+                protocol_context.insert("downstream_websocket_connection_id".to_owned(), json!("ws_switch"));
+            }
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                json!({"model":"gpt-5.4","input":format!("turn-{index}"),"session_id":"transport-switch","store":true}).as_object().unwrap().clone(),
+            ).unwrap().with_context(protocol_context);
+            let generate = GenerateRequest::from_protocol_payload(payload).with_provider_session_state(
+                ProviderSessionState::new("openai", Map::from_iter([
+                    ("account_id".to_owned(), json!("acct_provider_contract")),
+                    ("conversation_id".to_owned(), json!("conversation-transport-switch")),
+                    ("continuation_scope".to_owned(), json!("persisted")),
+                ])).unwrap(),
+            );
+            let mut response = provider.execute(
+                planned_request("openai", Operation::Generate(generate)),
+                context(&format!("req_transport_switch_{index}"), CancellationToken::new()),
+            ).await.unwrap();
+            while let Some(event) = response.next().await {
+                event.expect("response after downstream transport change");
+            }
+        }
+        server.await.unwrap();
+    }).await.expect("同一会话的 HTTP 请求不能复用已有 WS，后续 WS 请求仍可复用连接");
+}
+
+#[tokio::test]
 async fn responses_bill_sent_model_and_observe_unpriced_response_without_rewriting_it() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
@@ -479,7 +814,7 @@ async fn create_account_with_enabled(store: &Arc<MemoryAccountStore>, id: &str, 
         .await;
 }
 
-fn generate_operation() -> Operation {
+fn websocket_generate_operation() -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "openai",
@@ -488,11 +823,12 @@ fn generate_operation() -> Operation {
                 ("input".to_owned(), json!("hello")),
             ]),
         )
-        .expect("OpenAI payload"),
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
     ))
 }
 
-fn generate_with_session_context(
+fn generate_websocket_with_session_context(
     session_id: &str,
     thread_id: Option<&str>,
     turn_metadata: Option<&str>,
@@ -509,27 +845,30 @@ fn generate_with_session_context(
         body.insert("turnMetadata".to_owned(), json!(turn_metadata));
     }
     GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+        ProtocolPayload::json_object("openai", body)
+            .expect("OpenAI payload")
+            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
     )
 }
 
-fn generate_with_persisted_session_context(
+fn generate_websocket_with_persisted_session_context(
     account_id: &str,
     conversation_id: &str,
     session_id: &str,
     thread_id: &str,
 ) -> GenerateRequest {
-    generate_with_session_context(session_id, Some(thread_id), None).with_provider_session_state(
-        ProviderSessionState::new(
-            "openai",
-            Map::from_iter([
-                ("account_id".to_owned(), json!(account_id)),
-                ("conversation_id".to_owned(), json!(conversation_id)),
-                ("continuation_scope".to_owned(), json!("persisted")),
-            ]),
+    generate_websocket_with_session_context(session_id, Some(thread_id), None)
+        .with_provider_session_state(
+            ProviderSessionState::new(
+                "openai",
+                Map::from_iter([
+                    ("account_id".to_owned(), json!(account_id)),
+                    ("conversation_id".to_owned(), json!(conversation_id)),
+                    ("continuation_scope".to_owned(), json!("persisted")),
+                ]),
+            )
+            .expect("provider session state"),
         )
-        .expect("provider session state"),
-    )
 }
 
 fn http_generate_operation() -> Operation {
@@ -1139,7 +1478,7 @@ async fn openai_provider_rejects_a_foreign_provider_candidate_before_account_sel
     let store = Arc::new(MemoryAccountStore::default());
     let result = provider(&store)
         .execute(
-            planned_request("xai", generate_operation()),
+            planned_request("xai", websocket_generate_operation()),
             context("req_foreign_provider", CancellationToken::new()),
         )
         .await;
@@ -1158,7 +1497,7 @@ async fn cancelled_attempt_fails_before_account_selection_or_upstream_send() {
     cancellation.cancel();
     let result = provider(&store)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_cancelled", cancellation),
         )
         .await;
@@ -1241,7 +1580,7 @@ async fn generate_without_an_eligible_openai_account_fails_before_network_io() {
     let store = Arc::new(MemoryAccountStore::default());
     let result = provider(&store)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_no_account", CancellationToken::new()),
         )
         .await;
@@ -1808,7 +2147,11 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         server.uri(),
         Arc::clone(&leases),
     );
-    let root = Operation::Generate(generate_with_session_context("shared-root", None, None));
+    let root = Operation::Generate(generate_websocket_with_session_context(
+        "shared-root",
+        None,
+        None,
+    ));
     let root_stream = provider
         .execute(
             planned_request("openai", root.clone()),
@@ -1818,7 +2161,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         .expect("root selection");
     let root_account = root_stream.metadata().provider_account_id().clone();
     drop(root_stream);
-    let generation = Operation::Generate(generate_with_session_context(
+    let generation = Operation::Generate(generate_websocket_with_session_context(
         "shared-root",
         thread_id,
         None,
@@ -2004,7 +2347,11 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
             .continuation
             .affinity_hash
     );
-    let unrelated = Operation::Generate(generate_with_session_context("another-root", None, None));
+    let unrelated = Operation::Generate(generate_websocket_with_session_context(
+        "another-root",
+        None,
+        None,
+    ));
     assert_ne!(
         provider
             .request_observation(&unrelated, &client_key)
@@ -2163,7 +2510,7 @@ async fn capacity_selection_error_preserves_classification_and_retry_after() {
 
     let error = match provider_with_leases(&store, leases)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_capacity_busy", CancellationToken::new()),
         )
         .await
@@ -2189,7 +2536,7 @@ async fn selection_infrastructure_errors_have_a_distinct_classification() {
 
     let error = match provider(&store)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_selection_store_failure", CancellationToken::new()),
         )
         .await
@@ -2314,7 +2661,7 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
     });
 
     let provider = provider_with_base_url(&store, base_url);
-    let first_operation = Operation::Generate(generate_with_persisted_session_context(
+    let first_operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         CONVERSATION_ID,
         SESSION_ID,
@@ -2355,7 +2702,7 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
         Some("websocket_close_1009")
     );
 
-    let second_operation = Operation::Generate(generate_with_persisted_session_context(
+    let second_operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         CONVERSATION_ID,
         SESSION_ID,
@@ -2467,7 +2814,7 @@ async fn websocket_fast_path_miss_uses_http_and_keeps_background_preconnect() {
 
     let provider = provider_with_base_url(&store, base_url);
     let operation = |thread_id| {
-        Operation::Generate(generate_with_persisted_session_context(
+        Operation::Generate(generate_websocket_with_persisted_session_context(
             ACCOUNT_ID,
             CONVERSATION_ID,
             SESSION_ID,
@@ -2577,7 +2924,7 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let operation = if websocket {
-            Operation::Generate(generate_with_persisted_session_context(
+            Operation::Generate(generate_websocket_with_persisted_session_context(
                 "acct_abrupt_disconnect",
                 "conversation-refused",
                 "session-refused",
@@ -2622,7 +2969,7 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
         websocket.next().await.unwrap().unwrap();
         // The peer disappears after receiving the payload, without sending a Close frame.
     });
-    let operation = Operation::Generate(generate_with_persisted_session_context(
+    let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         "conversation-abrupt-disconnect",
         "session-abrupt-disconnect",
@@ -2720,7 +3067,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
     let provider = provider_with_base_url(&store, base_url);
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_ws_midstream_overload", CancellationToken::new()),
         )
         .await
@@ -2788,7 +3135,7 @@ async fn websocket_idle_timeout_diagnosis_survives_ambiguous_send_wrapping() {
                 .unwrap();
             futures::future::pending::<()>().await;
         });
-    let operation = Operation::Generate(generate_with_persisted_session_context(
+    let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         "conversation-idle-timeout",
         "session-idle-timeout",
@@ -2989,7 +3336,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
 
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
     let mut saw_websocket_observation = false;
-    let operation = Operation::Generate(generate_with_persisted_session_context(
+    let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         CONVERSATION_ID,
         SESSION_ID,
@@ -3062,7 +3409,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
     assert_eq!(connection.exit_reason(), "normal_close");
     assert!(connection.age_ms() >= connection.idle_ms());
 
-    let second_operation = Operation::Generate(generate_with_persisted_session_context(
+    let second_operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         CONVERSATION_ID,
         SESSION_ID,
@@ -3098,7 +3445,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
     drop(fresh_stream);
 
     let continuation_operation = Operation::Generate(
-        generate_with_session_context(
+        generate_websocket_with_session_context(
             "sticky-websocket-session",
             Some("thread-continuation"),
             None,
@@ -3128,7 +3475,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
     }
     drop(continuation_stream);
 
-    let other_operation = Operation::Generate(generate_with_session_context(
+    let other_operation = Operation::Generate(generate_websocket_with_session_context(
         "other-websocket-session",
         Some("thread-first"),
         None,
@@ -3218,7 +3565,7 @@ async fn repeated_websocket_failures_exhaust_budget_then_use_http_and_report_htt
     });
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
     for index in 0..3 {
-        let operation = Operation::Generate(generate_with_persisted_session_context(
+        let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
             "acct_websocket_close",
             "conversation-repeated-close",
             "repeated-close",
@@ -3247,7 +3594,7 @@ async fn repeated_websocket_failures_exhaust_budget_then_use_http_and_report_htt
         assert!(!error.replay_is_safe());
     }
     for index in 0..2 {
-        let operation = Operation::Generate(generate_with_persisted_session_context(
+        let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
             "acct_websocket_close",
             "conversation-repeated-close",
             "repeated-close",
@@ -3331,7 +3678,7 @@ async fn websocket_upgrade_required_immediately_enables_session_http_fallback() 
 
     let provider = provider_with_base_url(&store, base_url);
     let operation = || {
-        Operation::Generate(generate_with_session_context(
+        Operation::Generate(generate_websocket_with_session_context(
             "sticky-websocket-session",
             Some("thread-first"),
             None,
@@ -3388,7 +3735,7 @@ async fn websocket_upgrade_required_immediately_enables_session_http_fallback() 
         .execute(
             planned_request(
                 "openai",
-                Operation::Generate(generate_with_session_context(
+                Operation::Generate(generate_websocket_with_session_context(
                     "unrelated-session",
                     None,
                     None,
@@ -3429,7 +3776,7 @@ async fn fallback_attempt_transport_forces_http_sse_for_a_websocket_request() {
 
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             fallback_transport_context("req_fallback_transport_http"),
         )
         .await
@@ -3489,7 +3836,9 @@ async fn downstream_websocket_new_chain_should_override_session_and_attempt_http
         .execute(
             planned_request(
                 "openai",
-                Operation::Generate(generate_with_session_context(SESSION_ID, None, None)),
+                Operation::Generate(generate_websocket_with_session_context(
+                    SESSION_ID, None, None,
+                )),
             ),
             context("req_disable_optional_websocket", CancellationToken::new()),
         )
@@ -3588,7 +3937,7 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
     let provider = provider_with_base_url(&store, base_url);
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_ws_quota_rotation", CancellationToken::new()),
         )
         .await
@@ -3675,7 +4024,7 @@ async fn websocket_turn_state_metadata_is_exposed_through_response_observation()
 
     let mut stream = provider_with_base_url(&store, base_url)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_websocket_turn_state", CancellationToken::new()),
         )
         .await
@@ -3770,7 +4119,7 @@ async fn websocket_turn_state_token_is_decoded_into_response_observation_facts()
 
     let mut stream = provider_with_base_url(&store, base_url)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_websocket_turn_state_facts", CancellationToken::new()),
         )
         .await
@@ -3919,7 +4268,7 @@ async fn websocket_turn_state_metadata_close_does_not_authorize_replay() {
             .expect("close before terminal response");
     });
 
-    let operation = Operation::Generate(generate_with_persisted_session_context(
+    let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
         ACCOUNT_ID,
         "conversation-metadata-close",
         "session-metadata-close",
@@ -3977,7 +4326,7 @@ async fn disabled_account_is_excluded_from_normal_scheduling() {
 
     let result = provider(&store)
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_disabled_scheduling", CancellationToken::new()),
         )
         .await;
@@ -4241,7 +4590,10 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         ]),
     )
     .expect("payload")
-    .with_context(Map::from_iter([("turn_metadata".to_owned(), json!(raw))]));
+    .with_context(Map::from_iter([
+        ("turn_metadata".to_owned(), json!(raw)),
+        ("use_websocket".to_owned(), json!(true)),
+    ]));
     let mut stream = provider_with_base_url(&store, base_url)
         .execute(
             planned_request(
@@ -5063,7 +5415,7 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
         ),
         ("req_thread_spawn_fallback", None, Some(thread_spawn)),
     ] {
-        let operation = Operation::Generate(generate_with_session_context(
+        let operation = Operation::Generate(generate_websocket_with_session_context(
             "parent-session",
             thread_id,
             turn_metadata,
@@ -5105,7 +5457,7 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
             ClientApiKeyId::new("other-client").expect("client key"),
         ),
     ] {
-        let operation = Operation::Generate(generate_with_session_context(
+        let operation = Operation::Generate(generate_websocket_with_session_context(
             root,
             Some("child-one"),
             Some(thread_spawn),
@@ -5324,7 +5676,9 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
             .execute(
                 planned_request(
                     "openai",
-                    Operation::Generate(generate_with_session_context("root", thread, None)),
+                    Operation::Generate(generate_websocket_with_session_context(
+                        "root", thread, None,
+                    )),
                 ),
                 context("req_seed_child_failure", CancellationToken::new()),
             )
@@ -5375,7 +5729,9 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
             .execute(
                 planned_request(
                     "openai",
-                    Operation::Generate(generate_with_session_context("root", thread, None)),
+                    Operation::Generate(generate_websocket_with_session_context(
+                        "root", thread, None,
+                    )),
                 ),
                 context("req_after_child_failure", CancellationToken::new()),
             )
@@ -6002,7 +6358,7 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
                 .mount(&server)
                 .await;
             let operation = if use_websocket {
-                generate_operation()
+                websocket_generate_operation()
             } else {
                 http_generate_operation()
             };
@@ -6253,7 +6609,7 @@ async fn websocket_usage_limit_rejection_preserves_quota_state_for_account_rotat
         .expect(1).mount(&server).await;
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_ws_quota", CancellationToken::new()),
         )
         .await
@@ -6332,7 +6688,7 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
                 (server.uri(), Some(server), None)
             };
             let operation = if use_websocket {
-                generate_operation()
+                websocket_generate_operation()
             } else {
                 http_generate_operation()
             };
@@ -6743,7 +7099,9 @@ async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_se
         }
         Operation::Generate(
             GenerateRequest::from_protocol_payload(
-                ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+                ProtocolPayload::json_object("openai", body)
+                    .expect("OpenAI payload")
+                    .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
             )
             .with_provider_session_state(session_state),
         )
@@ -7740,7 +8098,7 @@ async fn completed_websocket_response_resets_consecutive_failure_budget() {
     });
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
     for (index, succeeds) in [false, true, false, false, true].into_iter().enumerate() {
-        let operation = Operation::Generate(generate_with_persisted_session_context(
+        let operation = Operation::Generate(generate_websocket_with_persisted_session_context(
             "acct_websocket_close",
             "conversation-budget-reset",
             "budget-reset",
@@ -7807,7 +8165,7 @@ async fn connection_limit_rejection_requests_one_provider_retry_and_reconnects_i
     });
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 1);
     let operation = || {
-        Operation::Generate(generate_with_persisted_session_context(
+        Operation::Generate(generate_websocket_with_persisted_session_context(
             "acct_websocket_close",
             "conversation-rejected",
             "rejected",
@@ -8072,7 +8430,7 @@ async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&st
     });
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
     let operation = || {
-        Operation::Generate(generate_with_persisted_session_context(
+        Operation::Generate(generate_websocket_with_persisted_session_context(
             "acct_provider_contract",
             "conversation-error-headers",
             "session-error-headers",
@@ -8186,7 +8544,7 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             context("req_limit_final", CancellationToken::new()),
         )
         .await
@@ -8428,7 +8786,7 @@ const API_KEY_BUSINESS_HEADERS: &[&str] = &[
     "x-openai-internal-future",
 ];
 
-fn generate_with_downstream_headers() -> Operation {
+fn generate_with_downstream_headers(use_websocket: bool) -> Operation {
     let mut headers: Vec<_> = API_KEY_DOWNSTREAM_HEADERS
         .iter()
         .chain(API_KEY_BUSINESS_HEADERS)
@@ -8447,10 +8805,10 @@ fn generate_with_downstream_headers() -> Operation {
                 .clone(),
         )
         .unwrap()
-        .with_context(Map::from_iter([(
-            "opaque_request_headers".to_owned(),
-            json!(headers),
-        )])),
+        .with_context(Map::from_iter([
+            ("opaque_request_headers".to_owned(), json!(headers)),
+            ("use_websocket".to_owned(), json!(use_websocket)),
+        ])),
     ))
 }
 
@@ -8508,7 +8866,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
         ));
         let mut stream = provider
             .execute(
-                planned_request("openai", generate_with_downstream_headers()),
+                planned_request("openai", generate_with_downstream_headers(false)),
                 context("req_api_http", CancellationToken::new()),
             )
             .await
@@ -8594,7 +8952,7 @@ async fn disabled_api_key_diagnostic_preserves_authentication_and_transport_cons
     let provider = provider_with_base_url(&store, oauth.uri());
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", websocket_generate_operation()),
             diagnostic_context("req_disabled_api_http", account_id),
         )
         .await
@@ -8690,7 +9048,7 @@ async fn api_key_http_account_is_rejected_before_websocket_warmup_or_old_revisio
             .await
             .is_err()
     );
-    let Operation::Generate(generate) = generate_operation() else {
+    let Operation::Generate(generate) = websocket_generate_operation() else {
         panic!("generate")
     };
     let stale = generate.with_provider_session_state(ProviderSessionState::new("openai", json!({"account_id":"acct_provider_contract","conversation_id":"old","credential_revision":9,"continuation_scope":"persisted"}).as_object().unwrap().clone()).unwrap());
@@ -8755,7 +9113,7 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
     let provider = provider(&store);
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_with_downstream_headers()),
+            planned_request("openai", generate_with_downstream_headers(true)),
             diagnostic_context("req_api_ws", "acct_provider_contract"),
         )
         .await
@@ -8780,7 +9138,7 @@ fn quota_continuation_operation(use_websocket: bool) -> Operation {
             .with_context(Map::from_iter([("use_websocket".to_owned(), json!(use_websocket))])),
         )
         .with_provider_session_state(
-            generate_with_persisted_session_context("acct_provider_contract", "conversation-quota", "quota-replay", "turn")
+            generate_websocket_with_persisted_session_context("acct_provider_contract", "conversation-quota", "quota-replay", "turn")
                 .provider_session_state("openai").unwrap().clone(),
         ),
     )
@@ -8935,7 +9293,7 @@ async fn quota_continuation_stream_rejection_only_projects_before_delivery() {
                 let operation = if native_continuation {
                     quota_continuation_operation(use_websocket)
                 } else if use_websocket {
-                    generate_operation()
+                    websocket_generate_operation()
                 } else {
                     http_generate_operation()
                 };
@@ -9110,7 +9468,7 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
         }
     });
     let provider = provider_with_base_url(&store, base_url);
-    let first = Operation::Generate(generate_with_persisted_session_context(
+    let first = Operation::Generate(generate_websocket_with_persisted_session_context(
         "acct_provider_contract",
         "conversation-quota",
         "quota-replay",
@@ -9163,7 +9521,8 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
     create_account(&store, "acct_affinity_switch_b").await;
     // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号。
     let replay = Operation::Generate(GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"turn","input":full_input}).as_object().unwrap().clone()).unwrap(),
+        ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"turn","input":full_input}).as_object().unwrap().clone()).unwrap()
+            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
     ));
     let mut stream = provider
         .execute(

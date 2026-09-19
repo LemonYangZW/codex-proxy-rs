@@ -17,6 +17,7 @@ pub use gateway_core::account::RotationStrategy;
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_prefer_websocket: bool,
     pub session_keepalive_enabled: bool,
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
@@ -52,6 +53,7 @@ pub struct RuntimeSettings {
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub openai_prefer_websocket: Option<bool>,
     pub session_keepalive_enabled: Option<bool>,
     pub session_rewrite_concurrency: Option<u32>,
     pub session_rewrite_retry_interval_seconds: Option<u32>,

@@ -37,6 +37,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
+        "openaiPreferWebsocket": false,
         "sessionKeepaliveEnabled": false,
         "sessionRewriteConcurrency": 3,
         "sessionRewriteRetryIntervalSeconds": 2,
@@ -105,6 +106,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        openai_prefer_websocket: false,
         session_keepalive_enabled: false,
         session_rewrite_concurrency: 3,
         session_rewrite_retry_interval_seconds: 2,
@@ -153,6 +155,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     assert_eq!(
         value,
         json!({
+        "openaiPreferWebsocket": false,
         "sessionKeepaliveEnabled": false,
         "sessionRewriteConcurrency": 3,
         "sessionRewriteRetryIntervalSeconds": 2,
@@ -210,6 +213,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        openai_prefer_websocket: false,
         session_keepalive_enabled: false,
         session_rewrite_concurrency: 3,
         session_rewrite_retry_interval_seconds: 2,
@@ -282,6 +286,55 @@ fn settings_request_should_reject_removed_bucket_retention() {
     body["bucketRetentionDays"] = json!(365);
 
     assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+}
+
+#[tokio::test]
+async fn websocket_preference_should_round_trip_and_preserve_omitted_updates() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router = app(fixture.state());
+    for (preference, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        let mut body = update_body();
+        if let Some(preference) = preference {
+            body["openaiPreferWebsocket"] = json!(preference);
+        } else {
+            body.as_object_mut()
+                .unwrap()
+                .remove("openaiPreferWebsocket");
+        }
+        let response = router
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["openaiPreferWebsocket"],
+            expected
+        );
+        let response = router
+            .clone()
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            response_json(response).await["data"]["openaiPreferWebsocket"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn websocket_preference_should_reject_non_boolean_values() {
+    for value in [json!("true"), json!(1), json!({})] {
+        let mut body = update_body();
+        body["openaiPreferWebsocket"] = value;
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
 }
 
 #[tokio::test]

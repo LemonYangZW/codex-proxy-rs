@@ -772,6 +772,7 @@ impl SettingsStore for FixtureSettingsStore {
     }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            openai_prefer_websocket: false,
             session_keepalive_enabled: false,
             session_rewrite_concurrency: 3,
             session_rewrite_retry_interval_seconds: 2,

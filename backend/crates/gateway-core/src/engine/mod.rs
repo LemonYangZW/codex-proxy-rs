@@ -314,6 +314,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
@@ -327,6 +328,12 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub const fn with_openai_prefer_websocket(mut self, enabled: bool) -> Self {
+        self.openai_prefer_websocket = enabled;
+        self
+    }
+
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
@@ -371,6 +378,7 @@ impl RequestAttemptContext {
             request_profile: None,
             pricing: Arc::default(),
             disable_fast: false,
+            openai_prefer_websocket: false,
             session_keepalive_enabled: false,
             request_location: None,
             timing_started_at: Instant::now(),
@@ -448,6 +456,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.request.disable_fast
+    }
+
+    #[must_use]
+    pub const fn openai_prefer_websocket(&self) -> bool {
+        self.request.openai_prefer_websocket
     }
 
     #[must_use]

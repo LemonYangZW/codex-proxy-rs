@@ -34,6 +34,7 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub openai_prefer_websocket: bool,
     pub session_keepalive_enabled: bool,
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
@@ -69,6 +70,7 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    pub openai_prefer_websocket: Option<bool>,
     pub session_keepalive_enabled: Option<bool>,
     pub session_rewrite_concurrency: Option<u32>,
     pub session_rewrite_retry_interval_seconds: Option<u32>,
@@ -197,6 +199,7 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            openai_prefer_websocket: self.openai_prefer_websocket,
             session_keepalive_enabled: self.session_keepalive_enabled,
             session_rewrite_concurrency: self.session_rewrite_concurrency,
             session_rewrite_retry_interval_seconds: self.session_rewrite_retry_interval_seconds,
@@ -245,6 +248,7 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            openai_prefer_websocket: settings.openai_prefer_websocket,
             session_keepalive_enabled: settings.session_keepalive_enabled,
             session_rewrite_concurrency: settings.session_rewrite_concurrency,
             session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,

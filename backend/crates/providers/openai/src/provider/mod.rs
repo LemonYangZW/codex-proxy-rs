@@ -591,7 +591,7 @@ impl Provider for CodexProvider {
         let requested_transport = if api_http {
             CodexProviderTransport::HttpOnly
         } else {
-            selected_transport(&upstream_request)
+            selected_transport(&upstream_request, context.openai_prefer_websocket())
         };
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
             && session_affinity

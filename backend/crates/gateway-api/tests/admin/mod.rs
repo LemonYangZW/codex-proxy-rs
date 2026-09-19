@@ -526,6 +526,9 @@ impl SettingsStore for MemorySettingsStore {
             session_rewrite_retry_interval_seconds: command
                 .session_rewrite_retry_interval_seconds
                 .unwrap_or(settings.session_rewrite_retry_interval_seconds),
+            openai_prefer_websocket: command
+                .openai_prefer_websocket
+                .unwrap_or(settings.openai_prefer_websocket),
             session_keepalive_enabled: command
                 .session_keepalive_enabled
                 .unwrap_or(settings.session_keepalive_enabled),
@@ -1443,6 +1446,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        openai_prefer_websocket: false,
         session_keepalive_enabled: false,
         session_rewrite_concurrency: 3,
         session_rewrite_retry_interval_seconds: 2,

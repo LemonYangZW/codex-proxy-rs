@@ -201,9 +201,15 @@ Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行。
 
-OAuth 账号在客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket。API Key 账号默认使用 HTTP/SSE，
-可在账号上配置 `prefer_websocket`；必须依赖 WS 的预热、非持久化新链和连接内续接不使用 HTTP-only 账号。
-客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
+普通 Responses 请求默认按本次客户端连接选择上游传输：HTTP 请求使用 HTTP/SSE，WebSocket 请求优先使用
+WebSocket；已有会话或连接池中的 WS 连接不会把后续 HTTP 请求自动切换为 WS。
+管理员可在「系统设置 → 上游配置 → OpenAI 上游传输」选择「WS 优先」，让普通 HTTP 请求也优先尝试上游 WS。
+请求正文可通过布尔字段 `use_websocket` 显式选择 WS 优先（`true`）或 HTTP/SSE（`false`），
+该字段由网关消费，不转发上游。API Key 账号默认仅允许 HTTP/SSE，配置 `prefer_websocket` 后才允许
+请求选择 WS；该账号配置本身不会把普通 HTTP 请求升级为 WS，但允许全局「WS 优先」策略生效。
+协议判定为必须使用 WS 的显式预热、非持久化新链和连接内续接，不使用 HTTP-only 账号，
+也不执行 HTTP 回退；允许 HTTP 回退的请求继续遵循现有恢复策略。
+客户端配置的 `supports_websockets` 控制客户端连接方式，服务端根据实际请求来源、显式选择和协议约束决定上游传输。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功。
 
 已建立模型执行的 Responses、Images 和 Search HTTP 响应按以下规则返回关联 ID：
@@ -1007,6 +1013,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+openaiPreferWebsocket
 sessionKeepaliveEnabled
 sessionKeepaliveRiskConfirmed
 sessionRewriteConcurrency
@@ -1037,6 +1044,10 @@ accountAutoFreezeProbeEnabled
 accountAutoFreezeProbeModel
 accountAutoFreezeAdaptiveConcurrency
 ```
+
+`openaiPreferWebsocket` 是布尔值，默认 `false`（跟随客户端），设为 `true` 时普通 OpenAI 请求也优先尝试上游 WS。
+省略或 `null` 保留当前值；保存并发布后用于后续请求，已开始的请求与内部重试沿用原快照，无需重启。
+该默认偏好不覆盖请求的显式 HTTP 选择、HTTP-only 账号限制或协议续写要求，详见 [Responses 传输规则](#3-openai-数据面与模型目录)。
 
 `sessionRewriteConcurrency` 为每模型从第四轮开始的探测并发数，整数 1～10，默认 3；`sessionRewriteRetryIntervalSeconds` 为第 4 轮起整轮探测结束后的等待秒数，整数 1～300，默认 6。两个字段省略或 `null` 保留当前值；保存后手动与后台刷新在下一轮读取新值，不打断正在等待或执行的请求。后台按该间隔扫描，已有票据剩余不足 10 分钟时才刷新。启用 State 重写的账号／所选模型默认 fail-closed：没有有效票据或 Redis 不可用时暂停承接对应业务请求。
 

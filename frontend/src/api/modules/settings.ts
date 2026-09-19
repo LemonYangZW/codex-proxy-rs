@@ -6,6 +6,7 @@ import request from '../request'
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 export interface RuntimeSettings {
+  openaiPreferWebsocket: boolean
   sessionKeepaliveEnabled: boolean
   sessionRewriteConcurrency: number
   sessionRewriteRetryIntervalSeconds: number

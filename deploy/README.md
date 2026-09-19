@@ -193,8 +193,10 @@ goals = true
 生图不要求开启 WebSocket。要启用客户端 WebSocket，把当前 Provider 的
 `supports_websockets` 改为 `true`，并检查反向代理是否允许 Upgrade。
 
-客户端到代理、代理到上游是两段独立连接。客户端关闭 WebSocket 后，
-服务端仍可能用 WebSocket 访问上游；客户端开关不控制服务端连接池和 HTTP 回退策略。
+客户端关闭 WebSocket 后，普通 HTTP 请求默认也使用 HTTP/SSE 访问上游。
+需要让普通 HTTP 请求也优先使用上游 WS 时，在「系统设置 → 上游配置 → OpenAI 上游传输」选择「WS 优先」并保存。
+客户端使用 WebSocket 时，上游账号须允许 WS；API Key 账号需要配置 `prefer_websocket`。
+显式传输选择、必须使用 WS 的续写约束与 HTTP 回退规则见 [API 文档](../docs/api.md#3-openai-数据面与模型目录)。
 
 ### 客户端配置兼容
 

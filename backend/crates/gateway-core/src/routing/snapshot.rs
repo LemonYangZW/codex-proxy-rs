@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
@@ -46,6 +47,12 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_openai_prefer_websocket(mut self, enabled: bool) -> Self {
+        self.openai_prefer_websocket = enabled;
+        self
+    }
+
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
@@ -107,6 +114,7 @@ impl SnapshotSettingsFacts {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            openai_prefer_websocket: false,
             session_keepalive_enabled: false,
             request_profiles: BTreeMap::new(),
             pricing: Arc::default(),
@@ -564,6 +572,7 @@ async fn compile_runtime_snapshot(
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
         snapshot
+            .with_openai_prefer_websocket(facts.settings.openai_prefer_websocket)
             .with_session_keepalive_enabled(facts.settings.session_keepalive_enabled)
             .with_pricing(facts.settings.pricing)
             .with_request_location(request_location)
@@ -579,6 +588,7 @@ async fn compile_runtime_snapshot(
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
@@ -599,6 +609,12 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn with_openai_prefer_websocket(mut self, enabled: bool) -> Self {
+        self.openai_prefer_websocket = enabled;
+        self
+    }
+
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
@@ -715,6 +731,7 @@ impl RuntimeSnapshot {
         Ok(Self {
             responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(64 * 1024 * 1024)
                 .expect("positive default limit"),
+            openai_prefer_websocket: false,
             session_keepalive_enabled: false,
             pricing: Arc::default(),
             request_location: None,
@@ -1028,6 +1045,7 @@ impl RuntimeSnapshot {
 
         Ok(RoutingPlan {
             config_revision: self.revision,
+            openai_prefer_websocket: self.openai_prefer_websocket,
             session_keepalive_enabled: self.session_keepalive_enabled,
             pricing: Arc::clone(&self.pricing),
             request_location: self.request_location.clone(),
@@ -1072,6 +1090,7 @@ impl RuntimeSnapshot {
         };
         Ok(RoutingPlan {
             config_revision: self.revision,
+            openai_prefer_websocket: self.openai_prefer_websocket,
             session_keepalive_enabled: self.session_keepalive_enabled,
             pricing: Arc::clone(&self.pricing),
             request_location: self.request_location.clone(),

@@ -536,6 +536,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序。
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
@@ -548,6 +549,11 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub const fn openai_prefer_websocket(&self) -> bool {
+        self.openai_prefer_websocket
+    }
+
     #[must_use]
     pub const fn session_keepalive_enabled(&self) -> bool {
         self.session_keepalive_enabled

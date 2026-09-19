@@ -210,7 +210,7 @@ OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL�
 随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 目录按账号和凭据版本隔离，标准 API 模型列表
 通过通用画像输出客户端目录，OAuth 原生对象保留。通用账号层按 Provider 提交的 credential state 调度，不以是否存在
 上游用户 ID 推断可用性；OAuth 未完成身份投影时由 Provider 保持 `unknown`。状态恢复和未补齐身份的凭据轮换保留 `unknown`。
-API Key 默认 HTTP/SSE，可选 WS 优先；选号先验证传输资格，WS pool 与 continuation 按凭据版本隔离。
+API Key 默认仅允许 HTTP/SSE，可配置为允许请求选择 WS；选号先验证传输资格，WS pool 与 continuation 按凭据版本隔离。
 OAuth 与 API Key 共用业务请求、响应和能力透传链路，差异限定在上游地址、认证与传输配置。
 OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配置的模型权限仍由 Core 与选号链路执行。
 
@@ -292,8 +292,10 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 都过滤该 header，网关继续校验 Client Key，上游认证由服务端账号产生。
 客户端配置示例维护在 [部署文档](../deploy/README.md#客户端配置)。
 
-客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
-不禁止 Provider 使用上游 WebSocket。响应终态前的 Close 1000 仍视为失败，
+API 将本次客户端 WS 连接标识和显式传输偏好传给 Provider；普通请求默认跟随客户端连接方式，
+全局 WS 优先设置随请求的配置快照冻结，保存并发布后用于新请求，不改变已开始请求的传输选择。
+Provider 统一处理账号传输资格、协议强制要求和恢复策略，具体规则见 [Responses API](api.md#3-openai-数据面与模型目录)。
+响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果。
 
 ### 错误与诊断三层边界

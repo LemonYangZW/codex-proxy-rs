@@ -22,6 +22,7 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const savedRequestLocation = shallowRef<RequestLocation>()
   const form = reactive({
+    openaiPreferWebsocket: false,
     sessionKeepaliveEnabled: false,
     sessionRewriteConcurrency: null as number | null,
     sessionRewriteRetryIntervalSeconds: null as number | null,
@@ -108,6 +109,7 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
+    form.openaiPreferWebsocket = data.openaiPreferWebsocket
     savedRequestLocation.value = { ...data.requestLocation }
     form.sessionKeepaliveEnabled = data.sessionKeepaliveEnabled
     form.sessionRewriteConcurrency = data.sessionRewriteConcurrency
@@ -244,6 +246,7 @@ export function useSettingsForm() {
     const openaiClientProfile = form.openaiClientProfile
     await saveAction.run(async () => {
       const result = await updateSettings({
+        openaiPreferWebsocket: form.openaiPreferWebsocket,
         sessionKeepaliveEnabled: form.sessionKeepaliveEnabled,
         sessionRewriteConcurrency,
         sessionRewriteRetryIntervalSeconds,

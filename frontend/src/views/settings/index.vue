@@ -21,6 +21,7 @@ import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import SessionKeepaliveCard from './components/SessionKeepaliveCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
+import UpstreamTransportCard from './components/UpstreamTransportCard.vue'
 import { useSettingsForm } from './composables/useSettingsForm'
 import { rotationOptions } from './constants'
 import PricingSection from './pricing/index.vue'
@@ -176,6 +177,7 @@ watch(section, (value) => {
         </template>
 
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">
+          <UpstreamTransportCard v-model="form.openaiPreferWebsocket" :disabled="disabled" />
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
           <BaseCard title="客户端身份" description="配置网关向上游声明的客户端类型、版本与请求头">
             <ClientProfileEditor v-if="form.openaiClientProfile" v-model="form.openaiClientProfile" :active="section === 'upstream'" :disabled="disabled" class="max-w-6xl" />

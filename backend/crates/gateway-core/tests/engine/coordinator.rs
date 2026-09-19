@@ -638,6 +638,24 @@ fn plan_with_profiles(
     disable_fast: bool,
     profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
 ) -> RoutingPlan {
+    plan_with_upstream_preferences(
+        operation,
+        account_selection_policy,
+        request_location,
+        disable_fast,
+        profiles,
+        false,
+    )
+}
+
+fn plan_with_upstream_preferences(
+    operation: &Operation,
+    account_selection_policy: AccountSelectionPolicy,
+    request_location: gateway_core::account::RequestLocation,
+    disable_fast: bool,
+    profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
+    prefer_websocket: bool,
+) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
@@ -679,6 +697,7 @@ fn plan_with_profiles(
         Vec::new(),
     )
     .expect("snapshot")
+    .with_openai_prefer_websocket(prefer_websocket)
     .with_request_location(Some(request_location))
     .with_account_directory(Arc::clone(&directory));
     snapshot
@@ -1511,6 +1530,43 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
         state.intermediate_request_ids,
         vec![Some("discarded-error".to_owned())]
     );
+}
+
+#[test]
+fn websocket_preference_should_reach_provider_attempt_context() {
+    for prefer in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan_with_upstream_preferences(
+            &operation,
+            AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                NonZeroU32::new(2).unwrap(),
+                Duration::ZERO,
+            ),
+            Default::default(),
+            false,
+            Default::default(),
+            prefer,
+        );
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_one",
+            items: complete_stream(None),
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        block_on(session.commit_downstream(Some(200))).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].openai_prefer_websocket(), prefer);
+    }
 }
 
 #[test]

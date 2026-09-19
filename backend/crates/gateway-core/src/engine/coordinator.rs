@@ -818,6 +818,7 @@ where
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())
                 .with_disable_fast(self.plan.disable_fast())
+                .with_openai_prefer_websocket(self.plan.openai_prefer_websocket())
                 .with_session_keepalive_enabled(self.plan.session_keepalive_enabled())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())

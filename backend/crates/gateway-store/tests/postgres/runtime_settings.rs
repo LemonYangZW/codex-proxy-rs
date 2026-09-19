@@ -9,6 +9,7 @@ use super::TestDatabase;
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        openai_prefer_websocket: None,
         session_keepalive_enabled: None,
         session_rewrite_concurrency: None,
         session_rewrite_retry_interval_seconds: None,
@@ -92,6 +93,41 @@ fn runtime_settings_reject_non_semver_client_min() {
     };
 
     assert!(settings.validate().is_err());
+}
+
+#[tokio::test]
+async fn websocket_preference_should_persist_and_reach_runtime_snapshots() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("websocket_preference").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(
+        !repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .openai_prefer_websocket
+    );
+    for (preference, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        let mut update = settings_with_margin(1_800);
+        update.openai_prefer_websocket = preference;
+        repository.update_runtime_settings(update).await.unwrap();
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .openai_prefer_websocket,
+            expected
+        );
+        let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.openai_prefer_websocket, expected);
+    }
+    database.close().await;
 }
 
 #[tokio::test]

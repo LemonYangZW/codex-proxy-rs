@@ -366,6 +366,54 @@ fn revision(value: u64) -> ConfigRevision {
 }
 
 #[test]
+fn websocket_preference_should_publish_for_new_requests_and_preserve_existing_plans() {
+    use gateway_core::account::ProviderAccountId;
+    use gateway_core::runtime::RuntimeSnapshotHandle;
+    let compile = |version, prefer| {
+        let facts = SnapshotFacts::new(
+            revision(version),
+            revision(version),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_openai_prefer_websocket(prefer),
+            Vec::new(),
+            Vec::new(),
+            vec![SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_ws_policy").unwrap(),
+                "alpha",
+            )],
+            Vec::new(),
+        );
+        block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .unwrap()
+    };
+    let plan = |snapshot: &gateway_core::routing::RuntimeSnapshot| {
+        snapshot
+            .plan(
+                &PublicModelId::new("public-model").unwrap(),
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &Default::default(),
+            )
+            .unwrap()
+    };
+    let handle = RuntimeSnapshotHandle::new(compile(1, false));
+    let previous = plan(&handle.acquire().unwrap());
+    handle.publish(compile(2, true));
+    let preferred = plan(&handle.acquire().unwrap());
+    assert!(preferred.openai_prefer_websocket());
+    assert!(!previous.openai_prefer_websocket());
+    handle.publish(compile(3, false));
+    assert!(!plan(&handle.acquire().unwrap()).openai_prefer_websocket());
+    assert!(preferred.openai_prefer_websocket());
+}
+
+#[test]
 fn global_request_location_should_be_frozen_when_snapshot_is_published() {
     use gateway_core::account::{ProviderAccountId, RequestLocation};
     use gateway_core::runtime::RuntimeSnapshotHandle;

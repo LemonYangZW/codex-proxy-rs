@@ -86,6 +86,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             .map_err(|error| admin_store_error("runtime settings", error))?;
         let replacement = postgres::ControlPlaneReplacement {
             settings: postgres::RuntimeSettingsUpdate {
+                openai_prefer_websocket: command.openai_prefer_websocket,
                 session_keepalive_enabled: command.session_keepalive_enabled,
                 session_rewrite_concurrency: command.session_rewrite_concurrency,
                 session_rewrite_retry_interval_seconds: command
@@ -125,6 +126,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "runtime_settings",
                 "1",
                 vec![
+                    "openai_prefer_websocket".to_owned(),
                     "session_keepalive_enabled".to_owned(),
                     "session_rewrite_concurrency".to_owned(),
                     "session_rewrite_retry_interval_seconds".to_owned(),
@@ -238,6 +240,7 @@ pub(crate) fn admin_runtime_settings(
         })
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
+        openai_prefer_websocket: settings.openai_prefer_websocket,
         session_keepalive_enabled: settings.session_keepalive_enabled,
         session_rewrite_concurrency: settings.session_rewrite_concurrency,
         session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,

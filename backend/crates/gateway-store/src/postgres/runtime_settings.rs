@@ -19,6 +19,7 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_prefer_websocket: bool,
     pub session_keepalive_enabled: bool,
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
@@ -112,6 +113,7 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
+    pub openai_prefer_websocket: Option<bool>,
     pub session_keepalive_enabled: Option<bool>,
     pub session_rewrite_concurrency: Option<u32>,
     pub session_rewrite_retry_interval_seconds: Option<u32>,
@@ -255,7 +257,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
+                    account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -376,7 +378,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
+                account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -438,6 +440,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      request_location_json = $23,
                      request_location_enabled = $24,
                      responses_max_decompressed_body_bytes = $25,
+                     openai_prefer_websocket = coalesce($30, openai_prefer_websocket),
                      session_keepalive_enabled = coalesce($26, session_keepalive_enabled),
                      session_rewrite_concurrency = coalesce($27, session_rewrite_concurrency),
                      session_rewrite_retry_interval_seconds = coalesce($28, session_rewrite_retry_interval_seconds),
@@ -487,6 +490,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.session_rewrite_concurrency.map(i64::from))
     .bind(update.session_rewrite_retry_interval_seconds.map(i64::from))
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.openai_prefer_websocket)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -536,6 +540,7 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
     session_rewrite_concurrency: i64,
     session_rewrite_retry_interval_seconds: i64,
@@ -573,6 +578,7 @@ struct RuntimeSettingsRow {
 
 fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
+        openai_prefer_websocket: row.openai_prefer_websocket,
         session_keepalive_enabled: row.session_keepalive_enabled,
         session_rewrite_concurrency: to_u32(row.session_rewrite_concurrency)?,
         session_rewrite_retry_interval_seconds: to_u32(row.session_rewrite_retry_interval_seconds)?,

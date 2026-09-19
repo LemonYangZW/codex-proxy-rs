@@ -709,11 +709,20 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
     .with_hidden(hidden)
 }
 
-pub(super) fn selected_transport(request: &CodexResponsesRequest) -> CodexProviderTransport {
+pub(super) fn selected_transport(
+    request: &CodexResponsesRequest,
+    prefer_websocket: bool,
+) -> CodexProviderTransport {
     if request.force_http_sse {
         CodexProviderTransport::HttpOnly
-    } else {
+    } else if prefer_websocket
+        || request.use_websocket
+        || request.downstream_websocket_connection_id.is_some()
+    {
         CodexProviderTransport::PreferWebSocket
+    } else {
+        // 默认跟随本次客户端传输；账号支持 WS 或已有连接不代表客户端选择了 WS。
+        CodexProviderTransport::HttpOnly
     }
 }
 
