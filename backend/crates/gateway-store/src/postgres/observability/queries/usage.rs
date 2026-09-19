@@ -393,7 +393,7 @@ pub(crate) async fn usage_diagnostics(
         " as dimension_name, mr.outcome, mr.attempt_count, mr.total_tokens,
                 mr.latency_ms, mr.first_token_ms, mr.cost_source, mr.cost_amount,
                 mr.cost_currency, mr.downstream_committed_at, mr.client_transport,
-                mr.client_status_code, ({completed_usage}) as is_completed_usage
+                mr.client_status_code, mr.turn_state_bytes, ({completed_usage}) as is_completed_usage
          from model_requests mr where mr.started_at >= ",
     ));
     statement.push_bind(range.start);
@@ -423,6 +423,8 @@ pub(crate) async fn usage_diagnostics(
                   count(*) filter (where outcome in ('cancelled', 'incomplete'))::bigint
                     as non_completion_count,
                   coalesce(sum(greatest(attempt_count - 1, 0)), 0)::bigint as retry_count,
+                  count(*) filter (where turn_state_bytes is not null)::bigint
+                    as turn_state_present_count,
                   count(*) filter (
                     where is_completed_usage and cost_source = 'provider_reported'
                   )::bigint
@@ -478,6 +480,7 @@ pub(crate) async fn usage_diagnostics(
                 first_token_p95_ms: optional_unsigned(row, "first_token_p95_ms")?,
                 non_completion_count: unsigned(row, "non_completion_count")?,
                 retry_count: unsigned(row, "retry_count")?,
+                turn_state_present_count: unsigned(row, "turn_state_present_count")?,
                 cost_coverage: coverage_from_row(row)?,
                 costs: Vec::new(),
             }),

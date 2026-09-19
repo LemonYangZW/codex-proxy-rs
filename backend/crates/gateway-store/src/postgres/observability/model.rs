@@ -689,6 +689,9 @@ pub struct DiagnosticObservation {
     pub first_token_p95_ms: Option<u64>,
     pub non_completion_count: u64,
     pub retry_count: u64,
+    /// 该维度分组下上游确实下发了 turn-state 元数据的请求数；
+    /// 用于计算「turn_state 缺失率」，识别某些传输方式（如 WebSocket）结构性缺失采集的场景。
+    pub turn_state_present_count: u64,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCostTotal>,
 }

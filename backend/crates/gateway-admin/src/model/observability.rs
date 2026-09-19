@@ -770,6 +770,7 @@ pub struct DiagnosticObservation {
     pub first_token_p95_ms: Option<u64>,
     pub non_completion_count: u64,
     pub retry_count: u64,
+    pub turn_state_present_count: u64,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
 }
@@ -1154,6 +1155,11 @@ pub struct DiagnosticsItem {
     pub estimated_cost: Option<DecimalAmount>,
     pub attempt_count: u64,
     pub total_tokens: u64,
+    /// 该维度分组下上游下发了 turn-state 元数据的请求数。
+    pub turn_state_present_count: u64,
+    /// 缺失占比：1 - turn_state_present_count / request_count；
+    /// WebSocket 传输下上游结构性地不保证每回合下发，该值天然偏高，非异常信号。
+    pub turn_state_missing_rate: f64,
 }
 
 /// 诊断结果。

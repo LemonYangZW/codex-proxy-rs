@@ -774,6 +774,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
             first_token_p95_ms: Some(1200),
             non_completion_count: 0,
             retry_count: 0,
+            turn_state_present_count: 0,
             cost_coverage: CostCoverage::default(),
             costs: Vec::new(),
         });

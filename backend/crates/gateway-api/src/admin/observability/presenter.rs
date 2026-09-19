@@ -1295,6 +1295,8 @@ pub(crate) fn diagnostics_view(
                 estimated_cost: item.estimated_cost.as_ref().map(ToString::to_string),
                 attempt_count: item.attempt_count,
                 total_tokens: item.total_tokens,
+                turn_state_present_count: item.turn_state_present_count,
+                turn_state_missing_rate: item.turn_state_missing_rate,
             })
             .collect(),
     }

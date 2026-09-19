@@ -704,6 +704,7 @@ pub(crate) fn admin_diagnostic_observation(
         first_token_p95_ms: observation.first_token_p95_ms,
         non_completion_count: observation.non_completion_count,
         retry_count: observation.retry_count,
+        turn_state_present_count: observation.turn_state_present_count,
         cost_coverage: admin_cost_coverage(observation.cost_coverage),
         costs: admin_currency_costs(observation.costs)?,
     })

@@ -450,6 +450,8 @@ export interface UsageDiagnosticItem {
   estimatedCost: string | null
   attemptCount: number
   totalTokens: number
+  turnStatePresentCount: number
+  turnStateMissingRate: number
 }
 
 export interface UsageDiagnosticsResponse {

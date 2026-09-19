@@ -165,6 +165,13 @@ function diagnosticNameDisplay(name: string) {
                 {{ row.nameDisplay.secondary }}
               </code>
             </span>
+            <span
+              v-if="resultDimension === 'transport'"
+              class="text-[10px] font-emphasis text-cp-text-quaternary"
+              :title="`该分组下 ${formatCompactNumber(row.turnStatePresentCount)} / ${formatCompactNumber(row.requestCount)} 个请求带有可用的 turn-state 体积事实；WebSocket 传输下上游不保证每回合都重新下发该元数据，缺失是结构性限制，不代表异常`"
+            >
+              turn-state 缺失 {{ formatPercent(row.turnStateMissingRate) }}
+            </span>
           </div>
         </template>
 

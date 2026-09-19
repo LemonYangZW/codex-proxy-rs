@@ -763,6 +763,8 @@ pub struct DiagnosticItemView {
     pub estimated_cost: Option<String>,
     pub attempt_count: u64,
     pub total_tokens: u64,
+    pub turn_state_present_count: u64,
+    pub turn_state_missing_rate: f64,
 }
 
 /// 诊断聚合响应。

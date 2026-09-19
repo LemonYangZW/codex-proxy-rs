@@ -274,8 +274,12 @@ const TURN_STATE_SHAPES = [
 /** 上游签发的轮次状态实测约 1 小时后失效；时长只用于展示，不参与判定。 */
 const TURN_STATE_TTL_MS = 60 * 60 * 1000
 
-/** normal 命中正常形态，suspect 是块数落在表外，unknown 是读不出 Fernet 结构。 */
-export type UsageTurnStateStatus = 'normal' | 'suspect' | 'unknown'
+/**
+ * normal 命中正常形态，suspect 是块数落在表外，unknown 是读不出 Fernet 结构、
+ * unavailable 是已知该传输方式下上游结构性地不下发该令牌（目前特指 WebSocket），
+ * 与 unknown 区分开是为了不让「没有事实」和「读到了但读不懂」混为一谈。
+ */
+export type UsageTurnStateStatus = 'normal' | 'suspect' | 'unknown' | 'unavailable'
 
 export interface UsageTurnState {
   status: UsageTurnStateStatus
@@ -300,10 +304,20 @@ export interface UsageTurnState {
  * 只使用服务端已解码的体积事实，不接触令牌本体；上游未在本次响应下发令牌、
  * 或该值不是 Fernet 结构时记无法判定，不因缺少事实推断是否为降智。
  */
-export function usageTurnState(record: Pick<UsageCommonRecord, 'turnStateBytes'>): UsageTurnState {
+export function usageTurnState(
+  record: Pick<UsageCommonRecord, 'turnStateBytes' | 'upstreamTransport'>,
+): UsageTurnState {
   const bytes = record.turnStateBytes
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 1)
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 1) {
+    // WebSocket 复用连接下，上游不保证每个回合都重新下发 turn-state 元数据帧，
+    // 实测缺失是该链路的结构性限制，不是异常，需要和真正读不出数据的 unknown 区分。
+    if (record.upstreamTransport === 'websocket') {
+      return turnStateUnavailable(
+        '本次请求经 WebSocket 传输；上游在该链路下不保证每个回合都重新下发 turn-state 元数据，没有事实不代表异常，仅代表该场景下无法用体积判断',
+      )
+    }
     return turnStateUnknown('本次响应未观测到上游 turn-state 令牌，无法从体积判断是否降智')
+  }
 
   const normalized = Math.trunc(bytes)
   const chars = Math.ceil(normalized / 3) * 4
@@ -363,6 +377,20 @@ function turnStateUnknown(description: string): UsageTurnState {
   }
 }
 
+function turnStateUnavailable(description: string): UsageTurnState {
+  return {
+    status: 'unavailable',
+    label: 'WS 不采集',
+    shape: null,
+    blocks: null,
+    bytes: null,
+    chars: null,
+    plaintextMinBytes: null,
+    plaintextMaxBytes: null,
+    description,
+  }
+}
+
 /**
  * 详情展示所需的 turn-state 事实：形态判定加签发与有效期。
  *
@@ -370,7 +398,7 @@ function turnStateUnknown(description: string): UsageTurnState {
  * 有效期按实测的约 1 小时推算，都不是上游声明的字段。
  */
 export function usageTurnStateDetail(
-  record: Pick<UsageCommonRecord, 'turnStateBytes'> & { providerMetadata?: Record<string, unknown> },
+  record: Pick<UsageCommonRecord, 'turnStateBytes' | 'upstreamTransport'> & { providerMetadata?: Record<string, unknown> },
 ) {
   const state = usageTurnState(record)
   const metadata = isRecord(record.providerMetadata) ? record.providerMetadata : {}

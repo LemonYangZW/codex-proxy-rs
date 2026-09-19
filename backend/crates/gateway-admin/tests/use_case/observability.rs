@@ -953,6 +953,7 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
         total_tokens: request_count.saturating_mul(100),
         average_latency_ms: Some(100),
         latency_p95_ms: Some(200),
+        turn_state_present_count: 0,
         cost_coverage: CostCoverage::default(),
         costs: Vec::new(),
     }

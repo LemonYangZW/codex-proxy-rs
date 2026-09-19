@@ -356,6 +356,8 @@ impl ObservabilityService for DefaultObservabilityService {
                 let non_completion_rate =
                     rate_or_zero(item.non_completion_count, item.request_count);
                 let retry_rate = rate_or_zero(item.retry_count, item.request_count);
+                let turn_state_missing_rate = 1.0
+                    - rate_or_zero(item.turn_state_present_count, item.request_count);
                 let impact_score = diagnostic_impact_score(
                     item.request_count,
                     total_requests,
@@ -383,6 +385,8 @@ impl ObservabilityService for DefaultObservabilityService {
                     estimated_cost: usd_cost(&item.costs),
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,
+                    turn_state_present_count: item.turn_state_present_count,
+                    turn_state_missing_rate,
                 }
             })
             .collect::<Vec<_>>();

@@ -1,6 +1,6 @@
 # Codex 降智缓解实验版
 
-`experimental/codex-anti-degradation` 基于 v3.10.0，用于探索 [#144](https://github.com/zyycn/codex-proxy-rs/issues/144)
+`experimental/codex-anti-degradation` 最初基于 v3.10.0，本分支基线已同步至 v3.11.0，用于探索 [#144](https://github.com/zyycn/codex-proxy-rs/issues/144)
 反馈的 Codex 疑似风控与响应质量下降（“降智”）问题。实现沿用 PR #151 的 `X-Codex-Turn-State` 刷新、会话保活和动态代理。
 它独立于 `main`，效果取决于上游行为，不承诺长期有效或进入正式版。
 按需维护必要修复，不自动跟随主分支，也不承诺与主版本同步发布。
@@ -19,7 +19,7 @@
 安装包包含后端程序和管理端静态资源；镜像使用多架构标签，例如：
 
 ```text
-ghcr.io/zyycn/codex-proxy-rs:3.10.0-exp.1
+ghcr.io/zyycn/codex-proxy-rs:3.11.0-exp.2
 ```
 
 所有平台构建类型均为 `experimental`，禁用应用内一键更新；更新时手动选择指定预发行版本。
@@ -28,12 +28,12 @@ ghcr.io/zyycn/codex-proxy-rs:3.10.0-exp.1
 ## Docker 独立部署
 
 必须使用独立安装目录、配置、PostgreSQL、Redis 与数据目录，不能与稳定版共用数据库或 `.runtime/`。
-从指定预发行页面下载部署文件；以下示例安装 v3.10.0-exp.1：
+从指定预发行页面下载部署文件；以下示例安装 v3.11.0-exp.2：
 
 ```bash
 mkdir -p codex-proxy-rs-codex-anti-degradation/deploy
 cd codex-proxy-rs-codex-anti-degradation
-export CPR_RELEASE_TAG='v3.10.0-exp.1'
+export CPR_RELEASE_TAG='v3.11.0-exp.2'
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/compose.yaml" -o deploy/compose.yaml
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/config.example.yaml" -o deploy/config.example.yaml
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/checksums.txt" -o deploy/checksums.txt
@@ -66,7 +66,11 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 ## 数据与回退
 
-本分支在 v3.10.0 基线之上包含 `0016_session_keepalive.sql`、`0017_session_rewrite_retry_policy.sql`、`0018_turn_state_bytes.sql`、`0019_client_profiles_and_model_pricing.sql`；0017 只增加 State 重写的并发数与重试间隔，已有实验版 0016 数据库可以原地升级。稳定版基线 v3.10.0 使用 0001–0015；
+本分支基线已从 v3.10.0 升级至 v3.11.0：`0001`–`0015` 与正式版一致；`0016_client_profiles_and_model_pricing.sql`
+是正式版 3.11 特性，编号永久冻结不可改动；`0017_session_keepalive.sql`、`0018_session_rewrite_retry_policy.sql`
+是本分支的会话保活与 State 重写配置，`0019_turn_state_bytes.sql` 是 turn-state 可观测记录。早期
+`v3.10.0-exp.1`／`v3.10.0-exp.2` 里会话保活相关迁移编号是 `0016`／`0017`，本次随基线切换顺延为
+`0017`／`0018`，内容不变，已有实验库可以原地升级。
 实验库不能原地降级到稳定版，也不能随意合并主分支未来同编号迁移。
 已经运行过 PR #151 原始 0016–0018 或旧版合并 0016 的源码实例，需要完整备份后重建与目标代码匹配的库，
 并按目标表结构恢复业务数据；不要修改 `_sqlx_migrations` 的 checksum。
@@ -80,7 +84,8 @@ State 票据保存在该实验实例的 Redis 中，TTL 为 60 分钟；网关�
 
 按需挑选主分支修复，重新检查迁移编号、数据合同与实验功能；不要把整个实验分支合回 `main`。
 发布新版本时，在实验分支维护 `release/notes.md`，使用现有 `release/publish <版本>` 入口，
-后续版本采用 `3.10.0-exp.N` 形式，`N` 从 1 开始递增；只有实际同步新的正式版基线后，才调整前面的版本号。
+后续版本采用 `<正式版基线>-exp.N` 形式，`N` 从 1 开始递增；只有实际同步新的正式版基线后，才调整前面的版本号
+（本次即随基线同步至 v3.11.0，从 `3.10.0-exp.2` 顺延为 `3.11.0-exp.2`）。
 现有已发布版本保留原标签、镜像与附件名称。
 
 发布流程识别为实验构建和 GitHub Pre-release，全部检查通过后发布完整平台产物。

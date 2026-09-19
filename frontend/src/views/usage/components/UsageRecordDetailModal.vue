@@ -45,10 +45,10 @@ const requestText = computed(() => props.record ? visibleRequestText(props.recor
 const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
 const modelDisplay = computed(() => props.record
   ? usageModelDisplay(props.record)
-  : { primary: '—', secondary: '', routes: [], turnState: usageTurnStateDetail({ turnStateBytes: null }) })
+  : { primary: '—', secondary: '', routes: [], turnState: usageTurnStateDetail({ turnStateBytes: null, upstreamTransport: null }) })
 const turnState = computed(() => props.record
   ? usageTurnStateDetail(props.record)
-  : usageTurnStateDetail({ turnStateBytes: null }))
+  : usageTurnStateDetail({ turnStateBytes: null, upstreamTransport: null }))
 const tokenDetails = computed(() => props.record ? usageTokenDetails(props.record) : null)
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
@@ -134,6 +134,8 @@ const turnStateNote = computed(() => {
     .map(shape => shape.degradedChars)
     .join(' / ')
   const base = `按 Fernet 密文块数判定：正常形态为 ${shapes}，疑似降智在各自基线上恰好多一块（${degraded} 字符）；块数只能把明文框进 16 字节的窗口，这是疑似判据而非确证。`
+  if (turnState.value.status === 'unavailable')
+    return `${base}本次请求经 WebSocket 传输，上游在该链路下不保证每个回合都重新下发 turn-state 元数据，缺失是结构性限制，不代表本次请求异常。`
   if (turnState.value.status === 'unknown')
     return `${base}本次没有可用的体积事实，无法判定。`
   return base
