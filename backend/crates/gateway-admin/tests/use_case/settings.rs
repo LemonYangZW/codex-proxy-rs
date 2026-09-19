@@ -141,7 +141,7 @@ async fn settings_should_require_keepalive_risk_ack_before_store_call() {
                 session_rewrite_concurrency: None,
                 session_rewrite_retry_interval_seconds: None,
                 session_keepalive_risk_confirmed: false,
-                disable_fast: None,
+                openai_client_profile: None,
                 request_location_enabled: false,
                 request_location: Default::default(),
                 model_mappings: Default::default(),
