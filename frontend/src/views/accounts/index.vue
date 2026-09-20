@@ -40,7 +40,7 @@ import { useAccountsTable } from './composables/useAccountsTable'
 import { accountColumns, derivedAccountStatus } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
-const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(accountColumns, 'accounts')
+const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(accountColumns, 'accounts')
 const {
   loading,
   accounts,
@@ -229,6 +229,7 @@ const { account: stateAccount, open: stateModalOpen, result: stateResult, loadin
             <BaseTableColumnSettings
               :options="columnOptions"
               @change="setColumnVisible"
+              @reorder="setColumnOrder"
               @reset="resetColumns"
             />
           </template>

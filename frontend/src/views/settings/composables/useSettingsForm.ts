@@ -1,6 +1,6 @@
 import type { rotationOptions } from '../constants'
 import type { RequestLocation } from '@/api'
-import type { ClientProfileSelection } from '@/api/modules/client-profiles'
+import type { ClientProfileSelection, XaiClientProfileSelection } from '@/api/modules/client-profiles'
 import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
@@ -27,6 +27,7 @@ export function useSettingsForm() {
     sessionRewriteConcurrency: null as number | null,
     sessionRewriteRetryIntervalSeconds: null as number | null,
     openaiClientProfile: null as ClientProfileSelection | null,
+    xaiClientProfile: null as XaiClientProfileSelection | null,
     requestLocationEnabled: false,
     requestLocation: { country: '', region: '', city: '', timezone: '' },
     refreshMarginSeconds: null as number | null,
@@ -128,6 +129,7 @@ export function useSettingsForm() {
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.openaiClientProfile = data.openaiClientProfile
+    form.xaiClientProfile = data.xaiClientProfile
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
@@ -193,7 +195,7 @@ export function useSettingsForm() {
   }
 
   async function saveSettings() {
-    if (saving.value || loading.value || !savedRequestLocation.value || !form.openaiClientProfile)
+    if (saving.value || loading.value || !savedRequestLocation.value || !form.openaiClientProfile || !form.xaiClientProfile)
       return
     const { sessionRewriteConcurrency, sessionRewriteRetryIntervalSeconds, refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
@@ -243,6 +245,7 @@ export function useSettingsForm() {
       toast.warning('探测模型名称不能超过 128 个字符')
       return
     }
+    const xaiClientProfile = form.xaiClientProfile
     const openaiClientProfile = form.openaiClientProfile
     await saveAction.run(async () => {
       const result = await updateSettings({
@@ -252,6 +255,7 @@ export function useSettingsForm() {
         sessionRewriteRetryIntervalSeconds,
         sessionKeepaliveRiskConfirmed: form.sessionKeepaliveEnabled,
         openaiClientProfile,
+        xaiClientProfile,
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,
         modelMappings: mappingPayload(),

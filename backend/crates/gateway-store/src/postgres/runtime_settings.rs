@@ -24,6 +24,7 @@ pub struct RuntimeSettings {
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
@@ -118,6 +119,7 @@ pub struct RuntimeSettingsUpdate {
     pub session_rewrite_concurrency: Option<u32>,
     pub session_rewrite_retry_interval_seconds: Option<u32>,
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -440,11 +442,13 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      request_location_json = $23,
                      request_location_enabled = $24,
                      responses_max_decompressed_body_bytes = $25,
-                     openai_prefer_websocket = coalesce($30, openai_prefer_websocket),
                      session_keepalive_enabled = coalesce($26, session_keepalive_enabled),
                      session_rewrite_concurrency = coalesce($27, session_rewrite_concurrency),
                      session_rewrite_retry_interval_seconds = coalesce($28, session_rewrite_retry_interval_seconds),
-                     provider_request_profiles_json = case when $29::jsonb is null then provider_request_profiles_json else jsonb_set(provider_request_profiles_json, '{openai}', $29) end,
+                     provider_request_profiles_json = provider_request_profiles_json
+                         || case when $29::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $29::jsonb) end
+                         || case when $31::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $31::jsonb) end,
+                     openai_prefer_websocket = coalesce($30, openai_prefer_websocket),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -491,6 +495,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.session_rewrite_retry_interval_seconds.map(i64::from))
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .bind(update.openai_prefer_websocket)
+    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -586,6 +591,11 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
             .provider_request_profiles_json
             .0
             .remove("openai")
+            .map(gateway_core::account::OpaqueProviderData::new),
+        xai_client_profile: row
+            .provider_request_profiles_json
+            .0
+            .remove("xai")
             .map(gateway_core::account::OpaqueProviderData::new),
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,

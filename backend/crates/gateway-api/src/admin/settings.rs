@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, fmt};
 
 use axum::{
     Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -39,6 +39,7 @@ pub struct RuntimeSettingsView {
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
+    pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: ModelMappings,
@@ -78,6 +79,8 @@ pub struct UpdateRuntimeSettingsRequest {
     pub session_keepalive_risk_confirmed: bool,
     #[serde(default, deserialize_with = "deserialize_profile_update")]
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, deserialize_with = "deserialize_profile_update")]
+    pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: ModelMappings,
@@ -207,6 +210,9 @@ impl UpdateRuntimeSettingsRequest {
             openai_client_profile: self
                 .openai_client_profile
                 .map(gateway_core::account::OpaqueProviderData::new),
+            xai_client_profile: self
+                .xai_client_profile
+                .map(gateway_core::account::OpaqueProviderData::new),
             request_location_enabled: self.request_location_enabled,
             request_location: self
                 .request_location
@@ -254,6 +260,9 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
             openai_client_profile: settings
                 .openai_client_profile
+                .map(gateway_core::account::OpaqueProviderData::into_inner),
+            xai_client_profile: settings
+                .xai_client_profile
                 .map(gateway_core::account::OpaqueProviderData::into_inner),
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
@@ -391,11 +400,11 @@ where
         .route("/api/admin/settings/pricing/sync", post(sync_pricing::<S>))
         .route("/api/admin/settings", get(settings::<S>))
         .route(
-            "/api/admin/settings/client-profiles/openai",
+            "/api/admin/settings/client-profiles/{provider}",
             get(client_profile_options::<S>),
         )
         .route(
-            "/api/admin/settings/client-profiles/openai/preview",
+            "/api/admin/settings/client-profiles/{provider}/preview",
             post(preview_client_profile::<S>),
         )
         .route("/api/admin/settings/update", post(update_settings::<S>))
@@ -762,6 +771,7 @@ fn deserialize_profile_update<'de, D: serde::Deserializer<'de>>(
 
 async fn client_profile_options<S>(
     _auth: AdminAuth,
+    Path(provider): Path<String>,
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
@@ -770,7 +780,7 @@ where
     let result = state
         .admin_services()
         .settings()
-        .client_profile_options()
+        .client_profile_options(&provider)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
@@ -787,6 +797,7 @@ struct ClientProfilePreviewRequest {
 
 async fn preview_client_profile<S>(
     _auth: AdminAuth,
+    Path(provider): Path<String>,
     State(state): State<S>,
     AdminJson(request): AdminJson<ClientProfilePreviewRequest>,
 ) -> Result<impl IntoResponse, AdminError>
@@ -799,7 +810,7 @@ where
     let result = state
         .admin_services()
         .settings()
-        .preview_client_profile(configuration.as_ref())
+        .preview_client_profile(&provider, configuration.as_ref())
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(

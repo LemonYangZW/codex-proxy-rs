@@ -112,6 +112,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
 
   return {
     id: options.id,
+    clientApiKeyName: '演示 Key',
     provider: options.provider,
     authenticationKind: options.authenticationKind,
     accountId: `account_${options.id}`,
@@ -149,6 +150,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
       totalTokensDisplay: totalTokens.toLocaleString('zh-CN'),
     },
     billing: {
+      longContextBillingApplied: false,
       inputAmountDisplay: options.estimatedCost,
       outputAmountDisplay: options.estimatedCost,
       cacheReadAmountDisplay: '$0.0004',

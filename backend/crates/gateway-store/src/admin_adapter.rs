@@ -92,6 +92,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 session_rewrite_retry_interval_seconds: command
                     .session_rewrite_retry_interval_seconds,
                 openai_client_profile: command.openai_client_profile,
+                xai_client_profile: command.xai_client_profile,
                 admin_api_key: current.settings.admin_api_key,
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
@@ -245,6 +246,7 @@ pub(crate) fn admin_runtime_settings(
         session_rewrite_concurrency: settings.session_rewrite_concurrency,
         session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
         openai_client_profile: settings.openai_client_profile,
+        xai_client_profile: settings.xai_client_profile,
         config_revision: admin_revision(settings.config_revision)?,
         request_location_enabled: settings.request_location_enabled,
         request_location: settings.request_location,
