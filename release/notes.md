@@ -1,4 +1,4 @@
-# v3.12.1-exp.1
+# v3.12.1-exp.2
 
 ## 实验说明
 
@@ -13,17 +13,18 @@
 - 普通 OpenAI Responses 请求默认跟随客户端传输：HTTP 请求使用 HTTP/SSE，WebSocket 请求优先使用上游 WS；可在「系统设置 → 上游配置 → OpenAI 上游传输」切换为「WS 优先」。
 - 保留显式传输选择、HTTP-only 账号限制、必须使用 WS 的续写要求和原有 HTTP 回退边界；API Key 账号需要配置 `prefer_websocket` 才允许选择 WS。
 - 更新器按发行线筛选可用版本，实验版只接收同一轮实验的后续版本。
+- 修复跨平台构建中的 Unix 文件权限扩展导入问题，确保 Linux amd64、arm64 和 macOS arm64 构建均可通过 CI。
 
 ## 安装与使用
 
 ```bash
-docker pull ghcr.io/lemonyangzw/codex-proxy-rs:3.12.1-exp.1
+docker pull ghcr.io/lemonyangzw/codex-proxy-rs:3.12.1-exp.2
 ```
 
 - Docker 镜像支持 Linux amd64、arm64；二进制归档提供 Linux amd64、Linux arm64、macOS arm64，并包含管理端静态资源。
 - 已有实例升级时保留原有 Compose 文件组合、端口、凭据和数据目录，仅将应用镜像更新为本版本；实验版与正式实例应使用独立目录、配置和数据。
 - 上游传输默认「跟随客户端」。需要让普通 HTTP 请求也优先尝试上游 WS 时，升级后在设置页选择「WS 优先」并保存。
-- 原有 State 重写开关与账号模型配置保持原值；使用范围及限制见 [State 重写说明](https://github.com/LemonYangZW/codex-proxy-rs/blob/v3.12.1-exp.1/docs/session-keepalive-design.md)。
+- 原有 State 重写开关与账号模型配置保持原值；使用范围及限制见 [State 重写说明](https://github.com/LemonYangZW/codex-proxy-rs/blob/v3.12.1-exp.2/docs/session-keepalive-design.md)。
 
 归档提供 SHA-256 校验和及 GitHub 构建产物证明；镜像附带 SBOM、构建来源证明和签名。
 
