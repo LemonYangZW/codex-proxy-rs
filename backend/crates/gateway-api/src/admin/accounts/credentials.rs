@@ -216,6 +216,7 @@ impl CompleteAccountAuthorizationRequest {
 pub struct UpdateAccountRequest {
     pub enable_session_keepalive: Option<bool>,
     pub session_keepalive_models: Option<Vec<String>>,
+    pub enable_passive_state_capture: Option<bool>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
@@ -247,6 +248,7 @@ impl UpdateAccountRequest {
         Ok(UpdateAccount {
             enable_session_keepalive: self.enable_session_keepalive,
             session_keepalive_models: self.session_keepalive_models,
+            enable_passive_state_capture: self.enable_passive_state_capture,
             outbound_proxy: super::wire::proxy_selection(
                 self.outbound_proxy_id,
                 self.outbound_proxy_url,

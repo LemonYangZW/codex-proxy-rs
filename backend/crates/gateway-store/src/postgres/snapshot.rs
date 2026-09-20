@@ -22,6 +22,7 @@ use super::ClientApiKeySnapshot;
 pub struct SnapshotRuntimeSettings {
     pub openai_prefer_websocket: bool,
     pub session_keepalive_enabled: bool,
+    pub passive_state_capture_enabled: bool,
     pub pricing: gateway_core::metering::PricingOverrides,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
@@ -166,6 +167,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             )
             .with_openai_prefer_websocket(data.settings.openai_prefer_websocket)
             .with_session_keepalive_enabled(data.settings.session_keepalive_enabled)
+            .with_passive_state_capture_enabled(data.settings.passive_state_capture_enabled)
             .with_request_profiles(data.settings.request_profiles)
             .with_pricing(data.settings.pricing)
             .with_request_location(
@@ -270,6 +272,7 @@ struct SnapshotSettingsRow {
     responses_max_decompressed_body_bytes: i64,
     openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
+    passive_state_capture_enabled: bool,
     provider_request_profiles_json:
         sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
 }
@@ -278,7 +281,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, openai_prefer_websocket, session_keepalive_enabled, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, openai_prefer_websocket, session_keepalive_enabled, passive_state_capture_enabled, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -292,6 +295,7 @@ async fn load_settings(
         SnapshotRuntimeSettings {
             openai_prefer_websocket: row.openai_prefer_websocket,
             session_keepalive_enabled: row.session_keepalive_enabled,
+            passive_state_capture_enabled: row.passive_state_capture_enabled,
             pricing: {
                 super::pricing::validate_pricing(&row.pricing_synced_json.0)?;
                 super::pricing::validate_pricing(&row.pricing_overrides_json.0)?;

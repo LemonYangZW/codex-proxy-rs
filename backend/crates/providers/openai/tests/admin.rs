@@ -1530,6 +1530,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     AccountRecord {
         enable_session_keepalive: false,
         session_keepalive_models: vec!["5.6 sol".into(), "6".into()],
+        enable_passive_state_capture: false,
         notes: None,
         model_access: Default::default(),
         outbound_proxy: None,
@@ -2328,7 +2329,9 @@ async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotatin
 
 #[tokio::test]
 async fn account_facts_preserve_state_tickets_but_unavailability_clears_them() {
-    use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort};
+    use gateway_core::provider_ports::{
+        ProviderSessionTicket, ProviderSessionTicketPort, TicketSource,
+    };
     let config = valid_config();
     let tickets = Arc::new(crate::session_manager::MemoryTickets::default());
     let bundle = provider_openai::initialize(
@@ -2343,6 +2346,7 @@ async fn account_facts_preserve_state_tickets_but_unavailability_clears_them() {
         credential_revision: 1,
         credential_binding: Some([7; 32]),
         expires_at: Utc::now().timestamp() + 3600,
+        source: TicketSource::ActiveProbe,
     };
     for model in ["gpt-6-astra", "gpt-5.6-sol"] {
         tickets.store(&account, model, &ticket).await.unwrap();

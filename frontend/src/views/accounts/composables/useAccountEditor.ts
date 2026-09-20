@@ -22,6 +22,7 @@ export function useAccountEditor(options: {
   const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
   const enableSessionKeepalive = shallowRef(false)
+  const enablePassiveStateCapture = shallowRef(false)
   const sessionKeepaliveModels = ref<string[]>([])
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -72,6 +73,7 @@ export function useAccountEditor(options: {
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
     enableSessionKeepalive.value = account.enableSessionKeepalive
+    enablePassiveStateCapture.value = account.enablePassiveStateCapture
     sessionKeepaliveModels.value = [...(account.sessionKeepaliveModels ?? ['gpt-5.6-sol', 'gpt-6-astra'])]
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
@@ -125,6 +127,7 @@ export function useAccountEditor(options: {
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
         enableSessionKeepalive: enableSessionKeepalive.value,
+        enablePassiveStateCapture: enablePassiveStateCapture.value,
         sessionKeepaliveModels: editingAccount.value?.provider === 'openai' ? sessionKeepaliveModels.value : undefined,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -161,6 +164,7 @@ export function useAccountEditor(options: {
     proxyId.value = ''
     schedulingEnabled.value = true
     enableSessionKeepalive.value = false
+    enablePassiveStateCapture.value = false
     concurrencyLimit.value = ''
     weight.value = '1'
     modelAccess.value = undefined
@@ -176,6 +180,7 @@ export function useAccountEditor(options: {
     notes,
     schedulingEnabled,
     enableSessionKeepalive,
+    enablePassiveStateCapture,
     sessionKeepaliveModels,
     concurrencyLimit,
     weight,

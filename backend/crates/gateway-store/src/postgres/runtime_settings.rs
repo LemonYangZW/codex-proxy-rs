@@ -23,6 +23,7 @@ pub struct RuntimeSettings {
     pub session_keepalive_enabled: bool,
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
+    pub passive_state_capture_enabled: bool,
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub config_revision: Revision,
@@ -118,6 +119,7 @@ pub struct RuntimeSettingsUpdate {
     pub session_keepalive_enabled: Option<bool>,
     pub session_rewrite_concurrency: Option<u32>,
     pub session_rewrite_retry_interval_seconds: Option<u32>,
+    pub passive_state_capture_enabled: Option<bool>,
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub admin_api_key: Option<String>,
@@ -259,7 +261,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
+                    account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds, passive_state_capture_enabled
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -305,6 +307,17 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                     .map_err(|_| provider_invalid("decode dynamic proxy"))
             })
             .transpose()
+        })
+    }
+
+    fn load_passive_state_capture_enabled(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            sqlx::query_scalar("select passive_state_capture_enabled from runtime_settings where id = 1")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|_| provider_unavailable("load passive state capture switch"))
         })
     }
 
@@ -380,7 +393,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds
+                account_auto_freeze_adaptive_concurrency, openai_prefer_websocket, session_keepalive_enabled, session_rewrite_concurrency, session_rewrite_retry_interval_seconds, passive_state_capture_enabled
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -449,6 +462,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                          || case when $29::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $29::jsonb) end
                          || case when $31::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $31::jsonb) end,
                      openai_prefer_websocket = coalesce($30, openai_prefer_websocket),
+                     passive_state_capture_enabled = coalesce($32, passive_state_capture_enabled),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -496,6 +510,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .bind(update.openai_prefer_websocket)
     .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.passive_state_capture_enabled)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -549,6 +564,7 @@ struct RuntimeSettingsRow {
     session_keepalive_enabled: bool,
     session_rewrite_concurrency: i64,
     session_rewrite_retry_interval_seconds: i64,
+    passive_state_capture_enabled: bool,
     provider_request_profiles_json: sqlx::types::Json<
         std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     >,
@@ -587,6 +603,7 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
         session_keepalive_enabled: row.session_keepalive_enabled,
         session_rewrite_concurrency: to_u32(row.session_rewrite_concurrency)?,
         session_rewrite_retry_interval_seconds: to_u32(row.session_rewrite_retry_interval_seconds)?,
+        passive_state_capture_enabled: row.passive_state_capture_enabled,
         openai_client_profile: row
             .provider_request_profiles_json
             .0

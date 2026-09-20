@@ -201,7 +201,7 @@ Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参�
 
 ## 5. Provider 与协议边界
 
-OpenAI 的可选 State 重写由私有 `session_manager` 持有探测生命周期，通过 Core 的 `ProviderSessionTicketPort` 在 Store 的 Redis 适配器中保存账号＋模型票据。Provider Bundle 共享该服务给受 Host 监督的 Worker、管理端口、选号器和发送前检查；Core 提供账号／全局开关、模型选择与运行策略合同。运维 Client 独立绑定测试通过的动态代理，强制 HTTP/1.1 并禁止连接复用；业务 HTTP/WS 出口不变。功能默认关闭，启用后受管理的账号／模型缺少有效票据时按 fail-closed 排除。协议准入、TTL 和恢复边界见 [State 重写设计](session-keepalive-design.md)。
+OpenAI 的可选 State 重写由私有 `session_manager` 持有探测生命周期，通过 Core 的 `ProviderSessionTicketPort` 在 Store 的 Redis 适配器中保存账号＋模型票据。Provider Bundle 共享该服务给受 Host 监督的 Worker、管理端口、选号器和发送前检查；Core 提供账号／全局开关、模型选择与运行策略合同。运维 Client 独立绑定测试通过的动态代理，强制 HTTP/1.1 并禁止连接复用；业务 HTTP/WS 出口不变。功能默认关闭，启用后受管理的账号／模型缺少有效票据时按 fail-closed 排除。协议准入、TTL 和恢复边界见 [State 重写设计](session-keepalive-design.md)。同一份票据存储与判定表还服务一个完全独立开关的被动能力：不经过动态代理，从真实业务响应里观测已合法的 State 并 fail-open 复用，详见 [被动捕获设计](passive-state-capture-design.md)。
 
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。

@@ -176,6 +176,7 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
         enable_session_keepalive: None,
         session_keepalive_models: None,
+        enable_passive_state_capture: None,
         notes: None,
         model_access: Default::default(),
         account_id: account_id.to_owned(),

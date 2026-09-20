@@ -79,6 +79,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     AccountView {
         enable_session_keepalive: account.enable_session_keepalive,
         session_keepalive_models: account.session_keepalive_models,
+        enable_passive_state_capture: account.enable_passive_state_capture,
         id: account.id.clone(),
         name: account.name,
         notes: account.notes,

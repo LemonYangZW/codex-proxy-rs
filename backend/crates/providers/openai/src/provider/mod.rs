@@ -557,7 +557,7 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
-        if context.session_keepalive_enabled()
+        if (context.session_keepalive_enabled() || context.passive_state_capture_enabled())
             && let Some(sessions) = &self.sessions
             && !sessions
                 .rewrite(lease.account(), &mut upstream_request)
@@ -665,6 +665,7 @@ impl Provider for CodexProvider {
             websocket_retry_count,
             stream_max_retries: self.stream_max_retries,
             session_capture,
+            sessions: self.sessions.clone(),
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {

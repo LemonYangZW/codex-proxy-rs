@@ -18,7 +18,7 @@ use crate::routing::UpstreamModelId;
 use crate::validation::{IdentifierError, validate_text};
 
 mod session_ticket;
-pub use session_ticket::{ProviderSessionTicket, ProviderSessionTicketPort};
+pub use session_ticket::{ProviderSessionTicket, ProviderSessionTicketPort, TicketSource};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
@@ -994,6 +994,11 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
         &self,
     ) -> BoxFuture<'_, Result<Option<crate::account::OutboundProxy>, ProviderStoreError>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// 被动捕获全局开关；与 `load_session_keepalive_proxy` 完全独立，不依赖动态代理。
+    fn load_passive_state_capture_enabled(&self) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
     }
 
     /// 仅首次启动写入该 Provider 的默认选择；已保存的管理配置始终优先。

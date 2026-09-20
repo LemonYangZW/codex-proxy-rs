@@ -636,6 +636,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     AccountRecord {
         enable_session_keepalive: false,
         session_keepalive_models: vec!["5.6 sol".into(), "6".into()],
+        enable_passive_state_capture: false,
         notes: None,
         model_access: Default::default(),
         outbound_proxy: None,

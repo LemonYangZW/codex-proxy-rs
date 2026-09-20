@@ -532,6 +532,9 @@ impl SettingsStore for MemorySettingsStore {
             session_keepalive_enabled: command
                 .session_keepalive_enabled
                 .unwrap_or(settings.session_keepalive_enabled),
+            passive_state_capture_enabled: command
+                .passive_state_capture_enabled
+                .unwrap_or(settings.passive_state_capture_enabled),
             openai_client_profile: None,
             xai_client_profile: None,
             request_location_enabled: command.request_location_enabled,
@@ -1456,6 +1459,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         session_keepalive_enabled: false,
         session_rewrite_concurrency: 3,
         session_rewrite_retry_interval_seconds: 2,
+        passive_state_capture_enabled: false,
         openai_client_profile: None,
         xai_client_profile: None,
         request_location_enabled: false,

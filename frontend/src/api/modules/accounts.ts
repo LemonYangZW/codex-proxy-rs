@@ -120,6 +120,7 @@ export interface AccountModelAccess {
 
 export interface Account {
   enableSessionKeepalive: boolean
+  enablePassiveStateCapture: boolean
   sessionKeepaliveModels: string[]
   outboundProxyEndpoint: string | null
   id: string
@@ -376,6 +377,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 
 interface AccountUpdateParam {
   enableSessionKeepalive?: boolean
+  enablePassiveStateCapture?: boolean
   sessionKeepaliveModels?: string[]
   outboundProxyUrl?: string
   outboundProxyId?: string

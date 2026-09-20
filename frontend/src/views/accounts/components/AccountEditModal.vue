@@ -34,6 +34,7 @@ const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const sessionKeepaliveModels = defineModel<string[]>('sessionKeepaliveModels', { required: true })
 const enableSessionKeepalive = defineModel<boolean>('enableSessionKeepalive', { required: true })
+const enablePassiveStateCapture = defineModel<boolean>('enablePassiveStateCapture', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -103,7 +104,15 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         <BaseSwitch v-model="enableSessionKeepalive" label="切换账号 State 重写" :disabled="saving" />
       </div>
 
-      <AccountSessionModelsField v-if="enableSessionKeepalive && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" />
+      <div v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-3">
+        <div class="grid gap-1">
+          <span class="text-cp font-medium text-cp-text-secondary">被动捕获 State</span>
+          <span class="text-cp-sm text-cp-text-tertiary">不发探针，从真实业务响应顺带观测并复用 State；须先在设置页开启全局开关，与 State 重写相互独立。</span>
+        </div>
+        <BaseSwitch v-model="enablePassiveStateCapture" label="切换账号被动捕获 State" :disabled="saving" />
+      </div>
+
+      <AccountSessionModelsField v-if="(enableSessionKeepalive || enablePassiveStateCapture) && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" />
 
       <BaseFormItem label="备注">
         <BaseTextarea

@@ -30,6 +30,9 @@ COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/apps ./apps
 COPY backend/crates ./crates
 COPY backend/migrations ./migrations
+# Windows 签出（core.autocrlf=true）会把迁移文件转成 CRLF；sqlx 的 checksum 按原始字节计算，
+# 混用行尾会导致已部署实例校验和对不上而拒绝启动。构建期统一归一化为 LF，与仓库存储的 blob 一致。
+RUN find migrations -name '*.sql' -exec sed -i 's/\r$//' {} +
 COPY release/version.yaml /app/release/version.yaml
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

@@ -1177,6 +1177,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
             UpdateAccount {
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1260,6 +1261,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     let command = UpdateAccount {
         enable_session_keepalive: None,
         session_keepalive_models: None,
+        enable_passive_state_capture: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1338,6 +1340,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     let command = UpdateAccount {
         enable_session_keepalive: None,
         session_keepalive_models: None,
+        enable_passive_state_capture: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1493,6 +1496,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
             UpdateAccount {
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -2454,6 +2458,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
             enable_session_keepalive: None,
             session_keepalive_models: None,
+            enable_passive_state_capture: None,
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
@@ -2524,6 +2529,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     let settings = UpdateAccount {
         enable_session_keepalive: None,
         session_keepalive_models: None,
+        enable_passive_state_capture: None,
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -3165,6 +3171,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
             UpdateAccount {
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
@@ -3543,6 +3550,7 @@ async fn session_keepalive_defaults_off_and_survives_unrelated_account_updates()
                             "model-c".to_owned(),
                         ]
                     }),
+                    enable_passive_state_capture: None,
                     account_id: id.as_str().to_owned(),
                     notes: None,
                     enabled: true,

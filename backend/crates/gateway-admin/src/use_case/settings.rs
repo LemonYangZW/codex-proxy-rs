@@ -326,6 +326,13 @@ impl SettingsService for DefaultSettingsService {
                 "请先确认会话保活可能导致账户异常的风险",
             ));
         }
+        if command.passive_state_capture_enabled == Some(true)
+            && !command.passive_state_capture_risk_confirmed
+        {
+            return Err(AdminError::invalid(
+                "请先确认被动捕获可能复用非官方合同约定的跨轮次 State 的风险",
+            ));
+        }
         let enabling_keepalive = command.session_keepalive_enabled == Some(true);
         for (provider, profile) in [
             ("openai", &command.openai_client_profile),

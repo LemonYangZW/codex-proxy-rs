@@ -111,7 +111,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select location_country, location_region, location_city, location_timezone, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, enable_session_keepalive, session_keepalive_models, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, enable_session_keepalive, session_keepalive_models, enable_passive_state_capture, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -578,6 +578,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     settings.session_keepalive_models.as_deref(),
                 )
                 .await?;
+                update_passive_state_capture_in_transaction(
+                    &mut transaction,
+                    ids,
+                    settings.enable_passive_state_capture,
+                )
+                .await?;
                 update_provider_accounts_scheduling_in_transaction(
                     &mut transaction,
                     ids,
@@ -634,6 +640,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &command.account_ids,
                 command.enable_session_keepalive,
                 command.session_keepalive_models.as_deref(),
+            )
+            .await?;
+            update_passive_state_capture_in_transaction(
+                &mut transaction,
+                &command.account_ids,
+                command.enable_passive_state_capture,
             )
             .await?;
             update_provider_accounts_scheduling_in_transaction(
@@ -1171,6 +1183,26 @@ async fn update_session_keepalive_in_transaction(
         .execute(&mut **transaction)
         .await
         .map_err(|_| postgres_unavailable("update session keepalive"))?;
+    }
+    Ok(())
+}
+
+/// 与 `update_session_keepalive_in_transaction` 完全独立的开关；不共用模型清单校验
+/// （模型清单本身仍复用 `session_keepalive_models` 列，但开关各自独立生效）。
+async fn update_passive_state_capture_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    enabled: Option<bool>,
+) -> StoreResult<()> {
+    if enabled.is_some() {
+        sqlx::query(
+            "update provider_accounts set enable_passive_state_capture = coalesce($2, enable_passive_state_capture) where id = any($1::text[])",
+        )
+        .bind(account_ids)
+        .bind(enabled)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("update passive state capture"))?;
     }
     Ok(())
 }

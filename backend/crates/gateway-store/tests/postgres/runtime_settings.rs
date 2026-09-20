@@ -13,6 +13,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         session_keepalive_enabled: None,
         session_rewrite_concurrency: None,
         session_rewrite_retry_interval_seconds: None,
+        passive_state_capture_enabled: None,
         openai_client_profile: None,
         xai_client_profile: None,
         request_location_enabled: false,

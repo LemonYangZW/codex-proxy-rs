@@ -994,6 +994,7 @@ impl SettingsStore for StaticSettingsStore {
             session_keepalive_enabled: false,
             session_rewrite_concurrency: 3,
             session_rewrite_retry_interval_seconds: 2,
+            passive_state_capture_enabled: false,
             openai_client_profile: None,
             xai_client_profile: None,
             request_location_enabled: false,
@@ -1425,6 +1426,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
             UpdateAccount {
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1466,6 +1468,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
             UpdateAccount {
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -2550,6 +2553,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
     AccountRecord {
         enable_session_keepalive: false,
         session_keepalive_models: vec!["5.6 sol".into(), "6".into()],
+        enable_passive_state_capture: false,
         notes: None,
         model_access: Default::default(),
         outbound_proxy: None,

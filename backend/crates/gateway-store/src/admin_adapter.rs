@@ -91,6 +91,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 session_rewrite_concurrency: command.session_rewrite_concurrency,
                 session_rewrite_retry_interval_seconds: command
                     .session_rewrite_retry_interval_seconds,
+                passive_state_capture_enabled: command.passive_state_capture_enabled,
                 openai_client_profile: command.openai_client_profile,
                 xai_client_profile: command.xai_client_profile,
                 admin_api_key: current.settings.admin_api_key,
@@ -131,6 +132,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "session_keepalive_enabled".to_owned(),
                     "session_rewrite_concurrency".to_owned(),
                     "session_rewrite_retry_interval_seconds".to_owned(),
+                    "passive_state_capture_enabled".to_owned(),
                     "provider_request_profiles_json".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
@@ -245,6 +247,7 @@ pub(crate) fn admin_runtime_settings(
         session_keepalive_enabled: settings.session_keepalive_enabled,
         session_rewrite_concurrency: settings.session_rewrite_concurrency,
         session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
+        passive_state_capture_enabled: settings.passive_state_capture_enabled,
         openai_client_profile: settings.openai_client_profile,
         xai_client_profile: settings.xai_client_profile,
         config_revision: admin_revision(settings.config_revision)?,

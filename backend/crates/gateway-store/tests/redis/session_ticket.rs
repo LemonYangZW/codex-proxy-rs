@@ -1,6 +1,6 @@
 use gateway_core::{
     account::ProviderAccountId,
-    provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort},
+    provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort, TicketSource},
 };
 use gateway_store::redis::RedisSessionTicketRepository;
 
@@ -23,6 +23,7 @@ async fn tickets_survive_repository_restart_keep_absolute_expiry_and_isolate_mod
         credential_revision: 7,
         credential_binding: Some([42; 32]),
         expires_at: expiry,
+        source: TicketSource::ActiveProbe,
     };
     first.store(&account, "model-a", &ticket).await.unwrap();
     drop(first);

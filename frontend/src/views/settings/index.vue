@@ -13,6 +13,7 @@ import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientProfileCard from './components/ClientProfileCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
+import PassiveStateCaptureCard from './components/PassiveStateCaptureCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
@@ -155,6 +156,7 @@ watch(section, (value) => {
             v-model:request-interval-ms="requestIntervalMsValue"
           />
           <SessionKeepaliveCard v-model="form.sessionKeepaliveEnabled" v-model:concurrency="sessionRewriteConcurrencyValue" v-model:retry-interval-seconds="sessionRewriteRetryIntervalSecondsValue" :disabled="disabled" />
+          <PassiveStateCaptureCard v-model="form.passiveStateCaptureEnabled" :disabled="disabled" />
           <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
           <RequestQueueCard
             v-model:max-waiting-per-key="maxWaitingPerKeyValue"

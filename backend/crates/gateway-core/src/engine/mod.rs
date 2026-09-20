@@ -316,6 +316,7 @@ impl ContinuationAttempt {
 pub struct RequestAttemptContext {
     openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
+    passive_state_capture_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
@@ -337,6 +338,12 @@ impl RequestAttemptContext {
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_passive_state_capture_enabled(mut self, enabled: bool) -> Self {
+        self.passive_state_capture_enabled = enabled;
         self
     }
 
@@ -380,6 +387,7 @@ impl RequestAttemptContext {
             disable_fast: false,
             openai_prefer_websocket: false,
             session_keepalive_enabled: false,
+            passive_state_capture_enabled: false,
             request_location: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -466,6 +474,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn session_keepalive_enabled(&self) -> bool {
         self.request.session_keepalive_enabled
+    }
+
+    #[must_use]
+    pub const fn passive_state_capture_enabled(&self) -> bool {
+        self.request.passive_state_capture_enabled
     }
 
     #[must_use]

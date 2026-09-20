@@ -820,6 +820,7 @@ where
                 .with_disable_fast(self.plan.disable_fast())
                 .with_openai_prefer_websocket(self.plan.openai_prefer_websocket())
                 .with_session_keepalive_enabled(self.plan.session_keepalive_enabled())
+                .with_passive_state_capture_enabled(self.plan.passive_state_capture_enabled())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())

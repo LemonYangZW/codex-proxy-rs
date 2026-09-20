@@ -119,6 +119,30 @@ impl MemoryAccountStore {
             ]);
     }
 
+    pub(crate) fn set_passive_state_capture(&self, id: &str, enabled: bool) {
+        let id = ProviderAccountId::new(id).expect("account ID");
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts.get_mut(&id).expect("seeded account");
+        stored.account = stored
+            .account
+            .clone()
+            .with_passive_state_capture(enabled)
+            .with_session_keepalive_models(vec![
+                "gpt-5.6-sol".to_owned(),
+                "gpt-6-astra".to_owned(),
+            ]);
+    }
+
+    pub(crate) fn set_plan_type(&self, id: &str, plan_type: Option<&str>) {
+        let id = ProviderAccountId::new(id).expect("account ID");
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts.get_mut(&id).expect("seeded account");
+        let account = stored.account.clone();
+        let email = account.email().map(str::to_owned);
+        let upstream_account_id = account.upstream_account_id().map(str::to_owned);
+        stored.account = account.with_profile(email, upstream_account_id, plan_type.map(str::to_owned));
+    }
+
     pub(crate) fn set_session_models(&self, id: &str, models: Vec<String>) {
         let id = ProviderAccountId::new(id).unwrap();
         let mut accounts = self.accounts.lock().unwrap();

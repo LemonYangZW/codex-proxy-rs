@@ -8,6 +8,7 @@ export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' 
 export interface RuntimeSettings {
   openaiPreferWebsocket: boolean
   sessionKeepaliveEnabled: boolean
+  passiveStateCaptureEnabled: boolean
   sessionRewriteConcurrency: number
   sessionRewriteRetryIntervalSeconds: number
   openaiClientProfile: ClientProfileSelection
@@ -80,7 +81,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt'> & { sessionKeepaliveRiskConfirmed?: boolean }
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt'> & { sessionKeepaliveRiskConfirmed?: boolean, passiveStateCaptureRiskConfirmed?: boolean }
 
 export function updateSettings(data: UpdateSettingsParam) {
   return request<RuntimeSettings>({

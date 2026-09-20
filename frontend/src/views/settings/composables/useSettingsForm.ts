@@ -24,6 +24,7 @@ export function useSettingsForm() {
   const form = reactive({
     openaiPreferWebsocket: false,
     sessionKeepaliveEnabled: false,
+    passiveStateCaptureEnabled: false,
     sessionRewriteConcurrency: null as number | null,
     sessionRewriteRetryIntervalSeconds: null as number | null,
     openaiClientProfile: null as ClientProfileSelection | null,
@@ -113,6 +114,7 @@ export function useSettingsForm() {
     form.openaiPreferWebsocket = data.openaiPreferWebsocket
     savedRequestLocation.value = { ...data.requestLocation }
     form.sessionKeepaliveEnabled = data.sessionKeepaliveEnabled
+    form.passiveStateCaptureEnabled = data.passiveStateCaptureEnabled
     form.sessionRewriteConcurrency = data.sessionRewriteConcurrency
     form.sessionRewriteRetryIntervalSeconds = data.sessionRewriteRetryIntervalSeconds
     form.requestLocationEnabled = data.requestLocationEnabled
@@ -251,9 +253,11 @@ export function useSettingsForm() {
       const result = await updateSettings({
         openaiPreferWebsocket: form.openaiPreferWebsocket,
         sessionKeepaliveEnabled: form.sessionKeepaliveEnabled,
+        passiveStateCaptureEnabled: form.passiveStateCaptureEnabled,
         sessionRewriteConcurrency,
         sessionRewriteRetryIntervalSeconds,
         sessionKeepaliveRiskConfirmed: form.sessionKeepaliveEnabled,
+        passiveStateCaptureRiskConfirmed: form.passiveStateCaptureEnabled,
         openaiClientProfile,
         xaiClientProfile,
         requestLocationEnabled: form.requestLocationEnabled,

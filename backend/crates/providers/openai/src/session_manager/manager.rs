@@ -14,7 +14,9 @@ use gateway_admin::{
 use gateway_core::{
     account::{CredentialState, OutboundProxy, ProviderAccount, ProviderAccountId},
     lifecycle::CancellationToken,
-    provider_ports::{ProviderRuntimePolicyPort, ProviderSessionTicket, ProviderSessionTicketPort},
+    provider_ports::{
+        ProviderRuntimePolicyPort, ProviderSessionTicket, ProviderSessionTicketPort, TicketSource,
+    },
     task::{DaemonTask, WorkerTaskError},
 };
 use reqwest::Client;
@@ -37,7 +39,15 @@ use crate::{
 
 pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["gpt-5.6-sol", "gpt-6-astra"];
 const TTL_SECONDS: i64 = 3600;
-const TURN_STATE_LENGTH: usize = 292;
+/// 按套餐标定的非降智 State 精确长度；现网 500+ 探针实测证明长度随套餐变化，
+/// 不是单一常量。缺失的套餐一律 fail-closed，同时在日志里保留实际长度供后续标定。
+const PLAN_STATE_LENGTHS: &[(&str, usize)] = &[
+    ("pro", 292),
+    // 唯一样本来自 429 响应，长度未经成功路径验证，暂按个人号同档处理。
+    ("plus", 292),
+    ("team", 332),
+    ("self_serve_business_prolite", 356),
+];
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_BEFORE_SECONDS: i64 = 600;
 const WARMUP_INTERVAL_SECONDS: u64 = 6;
@@ -500,11 +510,11 @@ impl SessionManager {
                 .and_modify(|previous| *previous = (*previous).max(deadline))
                 .or_insert(deadline);
         }
-        // 先断言 Header 原始字节长度，不复制、不 trim、不等待响应正文。
+        // 先按套餐查表断言 Header 原始字节长度，不复制、不 trim、不等待响应正文。
         if let Some(state) = response.headers().get("x-codex-turn-state")
-            && state.as_bytes().len() != TURN_STATE_LENGTH
+            && expected_state_length(account.plan_type()) != Some(state.as_bytes().len())
         {
-            log.record("invalid_state", json!({"status":status.as_u16(), "stateLength":state.as_bytes().len(), "elapsedMs":started.elapsed().as_millis()}));
+            log.record("invalid_state", json!({"status":status.as_u16(), "planType":account.plan_type(), "stateLength":state.as_bytes().len(), "elapsedMs":started.elapsed().as_millis()}));
             return Err(format!("上游 State 长度无效（重写 {probe_id}）"));
         }
         log.record("response_headers", json!({"status":status.as_u16(), "headers":diagnostics::headers(response.headers()), "elapsedMs":started.elapsed().as_millis()}));
@@ -519,7 +529,7 @@ impl SessionManager {
             .headers()
             .get("x-codex-turn-state")
             .and_then(|value| value.to_str().ok())
-            .filter(|value| valid_state(value))
+            .filter(|value| valid_state(account.plan_type(), value))
             .ok_or_else(|| format!("上游未返回有效 State（重写 {probe_id}）"))?
             .to_owned();
         drop(response);
@@ -598,11 +608,73 @@ impl SessionManager {
                     credential_revision: account.revision().get(),
                     credential_binding: Some(*binding),
                     expires_at: expire_at,
+                    source: TicketSource::ActiveProbe,
                 },
             )
             .await
             .map_err(|_| "State 缓存写入失败")?;
         Ok(expire_at)
+    }
+
+    /// 被动捕获：真实业务响应观测到合法 State 时才写入，票据仍新鲜则跳过写入。
+    /// 不做 A 路径那种代次/互斥锁校验——这是绑定单次已完成请求的即时操作，
+    /// `account`/`credential` 本来就是当次请求的最新值，不存在多秒探测期间
+    /// 配置中途变化的顾虑。
+    ///
+    /// 内部重新获取一次完整凭据（与 A 路径 `refresh_rounds` 同一入口），不依赖调用方
+    /// 传入的业务 `lease` 拆分字段——`lease` 不携带 `principal`，若直接复用会导致
+    /// 与 A 路径写入的 `credential_binding` 哈希公式不一致，破坏凭据变更检测。
+    pub async fn observe_passive_state(&self, account: &ProviderAccount, model: &str, raw_state: &str) {
+        if !passive_managed(account, model) {
+            return;
+        }
+        if !valid_state(account.plan_type(), raw_state) {
+            // 降智或未标定套餐：不缓存、不覆盖已有的合法票据（合法只代表长度匹配，
+            // 不代表密码学完整性或模型质量验证，正在使用中的票据同样可能已经降智，
+            // 只是长度这个启发式信号目前认为它合法）。不当作错误处理，只记录观测
+            // 供后续标定，继续等待下一次自然出现的合法 State。
+            tracing::debug!(
+                target: "passive_state_capture",
+                account_id = account.id().as_str(),
+                model,
+                plan_type = account.plan_type(),
+                state_length = raw_state.len(),
+                "Passive observation did not match non-degraded length; skipped"
+            );
+            return;
+        }
+        if let Ok(Some(ticket)) = self.load_ticket(account, model).await
+            && ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS
+        {
+            return;
+        }
+        let Ok(credential) = self.repository.load_runtime_credential(account).await else {
+            return;
+        };
+        let Ok(binding) = credential_binding(account, &credential) else {
+            return;
+        };
+        let Some(tickets) = self.tickets.as_ref() else {
+            return;
+        };
+        let expire_at = Utc::now().timestamp() + TTL_SECONDS;
+        if tickets
+            .store(
+                account.id(),
+                model,
+                &ProviderSessionTicket {
+                    value: raw_state.to_owned(),
+                    credential_revision: account.revision().get(),
+                    credential_binding: Some(binding),
+                    expires_at: expire_at,
+                    source: TicketSource::PassiveObservation,
+                },
+            )
+            .await
+            .is_ok()
+        {
+            tracing::info!(target: "passive_state_capture", account_id = account.id().as_str(), model, expire_at, "Passive observation cached");
+        }
     }
 
     async fn load_ticket(
@@ -622,7 +694,8 @@ impl SessionManager {
         if ticket.expires_at <= now {
             return Err("ticket_expired".to_owned());
         }
-        if ticket.expires_at > now + TTL_SECONDS || !valid_state(&ticket.value) {
+        if ticket.expires_at > now + TTL_SECONDS || !valid_state(account.plan_type(), &ticket.value)
+        {
             return Err("invalid_ticket".to_owned());
         }
         if ticket.credential_revision != account.revision().get() {
@@ -667,28 +740,26 @@ impl SessionManager {
     }
 
     /// 仅改写已选号请求的 State；不接收或替换业务 Client。
+    ///
+    /// A、B 两套开关同时命中时以 A（fail-closed）为准；A 未接管时若被动捕获
+    /// 命中账号+模型，票据存在就覆盖，不存在就原样放行（fail-open）。
     pub async fn rewrite(
         &self,
         account: &ProviderAccount,
         request: &mut CodexResponsesRequest,
     ) -> bool {
-        if !managed(account, request.model()) {
+        if managed(account, request.model()) {
+            let Ok(Some(ticket)) = self.load_ticket(account, request.model()).await else {
+                return false;
+            };
+            apply_state(request, ticket.value);
             return true;
         }
-        let Ok(Some(ticket)) = self.load_ticket(account, request.model()).await else {
-            return false;
-        };
-        let state = ticket.value;
-        // HTTP 头和复用 WS 连接的逐帧 metadata 使用同一值。
-        request.passthrough_headers.remove("x-codex-turn-state");
-        request.turn_state = Some(state.clone());
-        let mut metadata = request
-            .client_metadata()
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        metadata.insert("x-codex-turn-state".to_owned(), Value::String(state));
-        request.set_client_metadata(Some(Value::Object(metadata)));
+        if passive_managed(account, request.model())
+            && let Ok(Some(ticket)) = self.load_ticket(account, request.model()).await
+        {
+            apply_state(request, ticket.value);
+        }
         true
     }
 
@@ -777,13 +848,48 @@ fn admin_error(kind: ProviderAdminErrorKind, message: &'static str) -> ProviderA
     ProviderAdminError::new(kind).with_public_message(message)
 }
 
-fn valid_state(state: &str) -> bool {
-    state.len() == TURN_STATE_LENGTH && state.is_ascii() && state.starts_with("gAAAAA")
+/// 按 `plan_type` 查表得到该套餐的非降智精确长度；未标定的套餐返回 `None`（fail-closed）。
+fn expected_state_length(plan_type: Option<&str>) -> Option<usize> {
+    let plan = plan_type?;
+    PLAN_STATE_LENGTHS
+        .iter()
+        .find(|(candidate, _)| *candidate == plan)
+        .map(|(_, length)| *length)
+}
+
+fn valid_state(plan_type: Option<&str>, state: &str) -> bool {
+    state.is_ascii()
+        && state.starts_with("gAAAAA")
+        && expected_state_length(plan_type) == Some(state.len())
+}
+
+/// HTTP 头和复用 WS 连接的逐帧 metadata 使用同一值；A、B 两条路径共用。
+fn apply_state(request: &mut CodexResponsesRequest, state: String) {
+    request.passthrough_headers.remove("x-codex-turn-state");
+    request.turn_state = Some(state.clone());
+    let mut metadata = request
+        .client_metadata()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    metadata.insert("x-codex-turn-state".to_owned(), Value::String(state));
+    request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
 fn managed(account: &ProviderAccount, model: &str) -> bool {
     account.authentication_kind() == "oauth"
         && account.enable_session_keepalive()
+        && account
+            .session_keepalive_models()
+            .iter()
+            .any(|selected| selected == model)
+}
+
+/// 与 `managed()` 完全独立的被动捕获准入；只读账号自己的开关，不读全局开关
+/// （全局开关由调用方的配置快照负责短路，参见 `provider/mod.rs`）。
+fn passive_managed(account: &ProviderAccount, model: &str) -> bool {
+    account.authentication_kind() == "oauth"
+        && account.enable_passive_state_capture()
         && account
             .session_keepalive_models()
             .iter()

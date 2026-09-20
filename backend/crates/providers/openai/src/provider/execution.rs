@@ -182,6 +182,9 @@ pub(super) struct ColdResponse {
     pub(super) websocket_retry_count: u32,
     pub(super) stream_max_retries: u32,
     pub(super) session_capture: Option<OpenAiSessionCapture>,
+    /// 被动捕获 fail-open 写入用；不承担业务 Client 构建职责，仅用于观测后调用
+    /// `SessionManager::observe_passive_state`。
+    pub(super) sessions: Option<Arc<crate::SessionManager>>,
 }
 
 pub(super) struct ColdJsonResponse {
@@ -572,6 +575,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         websocket_retry_count,
         stream_max_retries,
         mut session_capture,
+        sessions,
     } = response;
     Box::pin(async_stream::try_stream! {
         let cyber_policy_scope = lease.cyber_policy_scope().cloned();
@@ -1064,6 +1068,19 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         )
         .await
         .unwrap_or(false);
+        // 被动捕获：真实业务响应确认的最终 turn_state 顺手交给 SessionManager 判断
+        // 是否结构合法、要不要缓存复用；诊断专用租约不写回账号状态。
+        if allows_account_state_mutation
+            && context.passive_state_capture_enabled()
+            && let Some(sessions) = sessions.as_ref()
+            && let Some(state) = session_capture
+                .as_ref()
+                .and_then(|capture| capture.turn_state.clone())
+        {
+            sessions
+                .observe_passive_state(&active_account, upstream_model.as_str(), &state)
+                .await;
+        }
         attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()

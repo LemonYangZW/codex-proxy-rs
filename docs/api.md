@@ -397,7 +397,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 更新指定 OpenAI 账号的 OAuth token 或 API Key 上游设置 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, enableSessionKeepalive?, sessionKeepaliveModels? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, enableSessionKeepalive?, sessionKeepaliveModels?, enablePassiveStateCapture? }` | 一次更新账号备注、调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
@@ -989,6 +989,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 账号列表返回 `enableSessionKeepalive`，默认 `false`。`POST /api/admin/accounts/update` 可携带该布尔值；省略或 `null` 保留原值。有效范围为 OpenAI OAuth 账号；开启不要求先判断业务故障原因。账号列表还返回 `sessionKeepaliveModels`，默认 `["gpt-5.6-sol", "gpt-6-astra"]`；账号更新可提交 1～32 个唯一的上游模型 ID，每个 1～128 字节且无首尾空白或控制字符，省略或 null 保留。其他必需更新字段仍按原接口提交。
 
+账号列表另返回 `enablePassiveStateCapture`，默认 `false`，与 `enableSessionKeepalive` 完全独立的开关，同样通过 `sessionKeepaliveModels` 限定生效模型；`POST /api/admin/accounts/update` 可携带该布尔值，省略或 `null` 保留原值。详见下文"被动捕获"。
+
 `POST /api/admin/accounts/session-state/refresh` 使用管理员鉴权，JSON 请求为 `{ "accountId": "acct_..." }`，拒绝未知字段。账号必须启用、保活开启且 OAuth 凭据可用，另须开启全局 `sessionKeepaliveEnabled` 并存在测试通过的动态代理。一次刷新该账号 `sessionKeepaliveModels` 中的所有精确模型，遵守账号模型权限，不接受客户端 Token、代理或 State。
 
 返回标准管理响应信封，`data` 示例：
@@ -1009,9 +1011,19 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 手动刷新不改变后台周期；后台每轮结束随机等待 3180–3300 秒。运维和业务分别使用独立 Client 与各自代理，业务仍走原账号出口。该实验性跨轮次覆盖与已核验官方 State 合同的偏离、模型名限制及停止方式见 [设计说明](session-keepalive-design.md)。
 
+### 被动捕获
+
+与上述"动态代理主动刷新"完全独立的实验性功能：不经过动态代理，从真实业务响应里读取已经结构合法的 `x-codex-turn-state`，在其 TTL 内复用给同账号同模型的后续请求。全局开关 `passiveStateCaptureEnabled` 与账号开关 `enablePassiveStateCapture` 均默认关闭，模型范围复用 `sessionKeepaliveModels`，不新增独立模型清单，也不依赖动态代理。
+
+fail-open 语义：缺少可用票据时按原样放行业务请求，不阻塞选号，不返回错误；与"动态代理主动刷新"的 fail-closed 语义相反。两个开关同时命中同一账号+模型时，以主动刷新为准。
+
+"未降智"判定与主动刷新共用同一张按 `planType` 查表的精确长度基准（不是区间匹配），详见 [设计说明](session-keepalive-design.md)。写入与主动刷新共用同一份 Redis 票据存储，仅通过内部 `source` 字段区分来源，不出现在任何管理接口或响应中。
+
 ## 8. 运行设置
 
 `sessionKeepaliveEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `sessionKeepaliveRiskConfirmed: true`，且代理管理中存在测试通过的唯一动态代理，否则拒绝。确认字段仅用于本次操作，不持久化也不返回。关闭全局开关停止新请求的 State 覆盖及后续重写；账号选择保留。
+
+`passiveStateCaptureEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `passiveStateCaptureRiskConfirmed: true`，否则拒绝——该确认与 `sessionKeepaliveRiskConfirmed` 各自独立、互不替代。确认字段同样仅用于本次操作，不持久化也不返回。不依赖动态代理，关闭全局开关立即停止新业务请求的被动覆盖与后续写入缓存。
 
 重写出口在代理管理中以 `isDynamic` 配置。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
 
@@ -1036,6 +1048,8 @@ sessionKeepaliveEnabled
 sessionKeepaliveRiskConfirmed
 sessionRewriteConcurrency
 sessionRewriteRetryIntervalSeconds
+passiveStateCaptureEnabled
+passiveStateCaptureRiskConfirmed
 openaiClientProfile
 requestLocationEnabled
 requestLocation

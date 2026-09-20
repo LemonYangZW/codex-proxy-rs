@@ -131,11 +131,21 @@ fn request(model: &str) -> CodexResponsesRequest {
 
 // 合成凭证只用于验证严格长度合同。
 fn state(label: &str) -> String {
-    format!("gAAAAA{label:A<284}==")
+    sized_state(label, 292)
+}
+
+/// 按套餐基准构造指定总长度的合成 State；用于验证按 `plan_type` 查表的判定。
+fn sized_state(label: &str, total_len: usize) -> String {
+    let width = total_len - 8;
+    format!("gAAAAA{label:A<width$}==")
 }
 
 fn success(label: &str) -> ResponseTemplate {
     response_with_state(&state(label))
+}
+
+fn success_sized(label: &str, total_len: usize) -> ResponseTemplate {
+    response_with_state(&sized_state(label, total_len))
 }
 
 fn response_with_state(state: &str) -> ResponseTemplate {
@@ -172,7 +182,7 @@ fn model_match(model: &'static str) -> impl wiremock::Match {
     }
 }
 
-use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort};
+use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort, TicketSource};
 #[derive(Default)]
 pub(super) struct MemoryTickets {
     entries: Mutex<

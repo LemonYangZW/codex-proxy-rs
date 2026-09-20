@@ -299,6 +299,9 @@ impl PgAdminAccountStore {
             if settings.enable_session_keepalive.is_some() {
                 changed_fields.push("enable_session_keepalive".to_owned());
             }
+            if settings.enable_passive_state_capture.is_some() {
+                changed_fields.push("enable_passive_state_capture".to_owned());
+            }
             if settings.model_access.is_some() {
                 changed_fields.push("model_access".to_owned());
             }
@@ -712,6 +715,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.enable_session_keepalive.is_some() {
             changed_fields.push("enable_session_keepalive".to_owned());
         }
+        if command.enable_passive_state_capture.is_some() {
+            changed_fields.push("enable_passive_state_capture".to_owned());
+        }
         if command.model_access.is_some() {
             changed_fields.push("model_access".to_owned());
         }
@@ -727,6 +733,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: vec![command.account_id.clone()],
                 enable_session_keepalive: command.enable_session_keepalive,
                 session_keepalive_models: command.session_keepalive_models,
+                enable_passive_state_capture: command.enable_passive_state_capture,
                 notes: command.notes,
                 enabled: Some(command.enabled),
                 concurrency_limit: Some(command.concurrency_limit),
@@ -895,6 +902,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: command.account_ids,
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                enable_passive_state_capture: None,
                 notes: None,
                 enabled: command.enabled,
                 concurrency_limit: command.concurrency_limit,

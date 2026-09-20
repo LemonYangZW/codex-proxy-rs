@@ -538,6 +538,7 @@ impl ProviderCandidate {
 pub struct RoutingPlan {
     openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
+    passive_state_capture_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
     config_revision: ConfigRevision,
@@ -557,6 +558,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn session_keepalive_enabled(&self) -> bool {
         self.session_keepalive_enabled
+    }
+
+    #[must_use]
+    pub const fn passive_state_capture_enabled(&self) -> bool {
+        self.passive_state_capture_enabled
     }
 
     #[must_use]

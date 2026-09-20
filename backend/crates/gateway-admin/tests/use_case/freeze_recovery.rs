@@ -29,6 +29,7 @@ fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> Runti
         session_keepalive_enabled: false,
         session_rewrite_concurrency: 3,
         session_rewrite_retry_interval_seconds: 2,
+        passive_state_capture_enabled: false,
         openai_client_profile: None,
         xai_client_profile: None,
         request_location_enabled: false,

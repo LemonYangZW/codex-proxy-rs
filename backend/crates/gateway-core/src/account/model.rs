@@ -725,6 +725,7 @@ const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
 pub struct ProviderAccount {
     enable_session_keepalive: bool,
     session_keepalive_models: Vec<String>,
+    enable_passive_state_capture: bool,
     id: ProviderAccountId,
     provider: ProviderKind,
     name: String,
@@ -772,6 +773,18 @@ impl ProviderAccount {
         self
     }
 
+    /// 独立于 `enable_session_keepalive` 的被动捕获开关；不依赖动态代理，fail-open。
+    #[must_use]
+    pub const fn enable_passive_state_capture(&self) -> bool {
+        self.enable_passive_state_capture
+    }
+
+    #[must_use]
+    pub const fn with_passive_state_capture(mut self, enabled: bool) -> Self {
+        self.enable_passive_state_capture = enabled;
+        self
+    }
+
     /// 创建账号快照。
     #[must_use]
     pub const fn new(
@@ -796,6 +809,7 @@ impl ProviderAccount {
             enabled: true,
             enable_session_keepalive: false,
             session_keepalive_models: Vec::new(),
+            enable_passive_state_capture: false,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),

@@ -38,6 +38,7 @@ pub struct RuntimeSettingsView {
     pub session_keepalive_enabled: bool,
     pub session_rewrite_concurrency: u32,
     pub session_rewrite_retry_interval_seconds: u32,
+    pub passive_state_capture_enabled: bool,
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
@@ -77,6 +78,9 @@ pub struct UpdateRuntimeSettingsRequest {
     pub session_rewrite_retry_interval_seconds: Option<u32>,
     #[serde(default)]
     pub session_keepalive_risk_confirmed: bool,
+    pub passive_state_capture_enabled: Option<bool>,
+    #[serde(default)]
+    pub passive_state_capture_risk_confirmed: bool,
     #[serde(default, deserialize_with = "deserialize_profile_update")]
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, deserialize_with = "deserialize_profile_update")]
@@ -207,6 +211,8 @@ impl UpdateRuntimeSettingsRequest {
             session_rewrite_concurrency: self.session_rewrite_concurrency,
             session_rewrite_retry_interval_seconds: self.session_rewrite_retry_interval_seconds,
             session_keepalive_risk_confirmed: self.session_keepalive_risk_confirmed,
+            passive_state_capture_enabled: self.passive_state_capture_enabled,
+            passive_state_capture_risk_confirmed: self.passive_state_capture_risk_confirmed,
             openai_client_profile: self
                 .openai_client_profile
                 .map(gateway_core::account::OpaqueProviderData::new),
@@ -258,6 +264,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             session_keepalive_enabled: settings.session_keepalive_enabled,
             session_rewrite_concurrency: settings.session_rewrite_concurrency,
             session_rewrite_retry_interval_seconds: settings.session_rewrite_retry_interval_seconds,
+            passive_state_capture_enabled: settings.passive_state_capture_enabled,
             openai_client_profile: settings
                 .openai_client_profile
                 .map(gateway_core::account::OpaqueProviderData::into_inner),

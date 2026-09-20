@@ -649,7 +649,7 @@ async fn retry_rounds_pick_up_changed_global_concurrency_and_interval() {
 }
 
 #[tokio::test]
-async fn every_non_292_length_is_rejected_and_previous_cache_is_preserved() {
+async fn every_non_matching_length_is_rejected_for_pro_and_previous_cache_is_preserved() {
     let proxy = MockServer::start().await;
     let (store, policy, manager) = fixture(Some(&proxy.uri())).await;
     for model in SESSION_KEEPALIVE_MODELS {
@@ -1092,6 +1092,7 @@ async fn selector_skips_missing_ticket_and_recovers_only_the_ready_account_model
                 credential_revision: account.revision().get(),
                 credential_binding: None,
                 expires_at: Utc::now().timestamp() + 3600,
+                source: TicketSource::ActiveProbe,
             },
         )
         .await
@@ -1178,4 +1179,159 @@ async fn credential_rotation_during_probe_discards_old_identity_result() {
                 .await
         );
     }
+}
+
+#[tokio::test]
+async fn team_and_business_prolite_plan_types_can_now_activate_keepalive() {
+    // 现网实测：team=332、business_prolite=356 曾被写死的 292 长度判定 100% 误杀。
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    store.set_plan_type("acct_a", Some("team"));
+    store.set_plan_type("acct_b", Some("self_serve_business_prolite"));
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success_sized("team-state", 332)).await;
+        mock_model(
+            &proxy,
+            "acct_b",
+            model,
+            success_sized("business-prolite-state", 356),
+        )
+        .await;
+    }
+    for account in ["acct_a", "acct_b"] {
+        let result = manager
+            .refresh(&ProviderAccountId::new(account).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            result.models.iter().all(|item| item.error.is_none()),
+            "account {account} unexpectedly failed: {:?}",
+            result.models
+        );
+    }
+}
+
+#[tokio::test]
+async fn passive_capture_fail_open_without_ticket_leaves_request_untouched() {
+    let (store, _, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", true);
+    let mut request = request("gpt-5.6-sol");
+    let ok = manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut request)
+        .await;
+    assert!(ok, "passive capture must never block the request");
+    assert_eq!(request.turn_state.as_deref(), Some("client-state"));
+}
+
+#[tokio::test]
+async fn passive_capture_applies_a_present_ticket_when_active_keepalive_is_disabled() {
+    let (store, policy, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", true);
+    let account = store.account("acct_a").unwrap();
+    policy
+        .tickets
+        .store(
+            account.id(),
+            "gpt-5.6-sol",
+            &ProviderSessionTicket {
+                value: state("passive-ticket"),
+                credential_revision: account.revision().get(),
+                credential_binding: None,
+                expires_at: Utc::now().timestamp() + 3600,
+                source: TicketSource::PassiveObservation,
+            },
+        )
+        .await
+        .unwrap();
+    let mut request = request("gpt-5.6-sol");
+    let ok = manager.rewrite(&account, &mut request).await;
+    assert!(ok);
+    assert_eq!(
+        request.turn_state.as_deref(),
+        Some(state("passive-ticket").as_str())
+    );
+}
+
+#[tokio::test]
+async fn active_keepalive_stays_fail_closed_even_when_passive_capture_is_also_enabled() {
+    let (store, _, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", true);
+    store.set_passive_state_capture("acct_a", true);
+    let mut request = request("gpt-5.6-sol");
+    let ok = manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut request)
+        .await;
+    assert!(!ok, "A 路径缺票必须继续 fail-closed，不能被 B 路径的开关放行");
+}
+
+#[tokio::test]
+async fn observe_passive_state_only_caches_length_matching_plan_state() {
+    let (store, policy, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", false);
+    let id = ProviderAccountId::new("acct_a").unwrap();
+
+    // 开关关闭：不写入。
+    manager
+        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("off"))
+        .await;
+    assert!(policy.tickets.load(&id, "gpt-5.6-sol").await.unwrap().is_none());
+
+    store.set_passive_state_capture("acct_a", true);
+
+    // 长度不匹配 plan_type 基准（降智或未标定套餐）：不写入，不当错误处理。
+    manager
+        .observe_passive_state(
+            &store.account("acct_a").unwrap(),
+            "gpt-5.6-sol",
+            &sized_state("degraded", 312),
+        )
+        .await;
+    assert!(policy.tickets.load(&id, "gpt-5.6-sol").await.unwrap().is_none());
+
+    // 长度匹配：写入，来源标记为 PassiveObservation，TTL 约为一小时。
+    manager
+        .observe_passive_state(
+            &store.account("acct_a").unwrap(),
+            "gpt-5.6-sol",
+            &state("captured"),
+        )
+        .await;
+    let ticket = policy
+        .tickets
+        .load(&id, "gpt-5.6-sol")
+        .await
+        .unwrap()
+        .expect("valid observation must be cached");
+    assert_eq!(ticket.value, state("captured"));
+    assert_eq!(ticket.source, TicketSource::PassiveObservation);
+    assert!(ticket.expires_at - Utc::now().timestamp() > 3500);
+}
+
+#[tokio::test]
+async fn observe_passive_state_skips_write_when_existing_ticket_is_still_fresh() {
+    let (store, policy, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", true);
+    let id = ProviderAccountId::new("acct_a").unwrap();
+
+    manager
+        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("first"))
+        .await;
+    manager
+        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("second"))
+        .await;
+    let ticket = policy
+        .tickets
+        .load(&id, "gpt-5.6-sol")
+        .await
+        .unwrap()
+        .expect("first observation must be cached");
+    assert_eq!(
+        ticket.value,
+        state("first"),
+        "fresh ticket must not be overwritten by a later observation"
+    );
 }

@@ -30,6 +30,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 pub struct SnapshotSettingsFacts {
     openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
+    passive_state_capture_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     request_location_enabled: bool,
@@ -56,6 +57,12 @@ impl SnapshotSettingsFacts {
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_passive_state_capture_enabled(mut self, enabled: bool) -> Self {
+        self.passive_state_capture_enabled = enabled;
         self
     }
 
@@ -116,6 +123,7 @@ impl SnapshotSettingsFacts {
         Self {
             openai_prefer_websocket: false,
             session_keepalive_enabled: false,
+            passive_state_capture_enabled: false,
             request_profiles: BTreeMap::new(),
             pricing: Arc::default(),
             request_location_enabled: false,
@@ -574,6 +582,7 @@ async fn compile_runtime_snapshot(
         snapshot
             .with_openai_prefer_websocket(facts.settings.openai_prefer_websocket)
             .with_session_keepalive_enabled(facts.settings.session_keepalive_enabled)
+            .with_passive_state_capture_enabled(facts.settings.passive_state_capture_enabled)
             .with_pricing(facts.settings.pricing)
             .with_request_location(request_location)
             .with_responses_max_decompressed_body_bytes(decompressed_body_limit)
@@ -590,6 +599,7 @@ async fn compile_runtime_snapshot(
 pub struct RuntimeSnapshot {
     openai_prefer_websocket: bool,
     session_keepalive_enabled: bool,
+    passive_state_capture_enabled: bool,
     pricing: Arc<crate::metering::PricingOverrides>,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
@@ -618,6 +628,12 @@ impl RuntimeSnapshot {
     #[must_use]
     pub const fn with_session_keepalive_enabled(mut self, enabled: bool) -> Self {
         self.session_keepalive_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_passive_state_capture_enabled(mut self, enabled: bool) -> Self {
+        self.passive_state_capture_enabled = enabled;
         self
     }
 
@@ -733,6 +749,7 @@ impl RuntimeSnapshot {
                 .expect("positive default limit"),
             openai_prefer_websocket: false,
             session_keepalive_enabled: false,
+            passive_state_capture_enabled: false,
             pricing: Arc::default(),
             request_location: None,
             revision,
@@ -1047,6 +1064,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             openai_prefer_websocket: self.openai_prefer_websocket,
             session_keepalive_enabled: self.session_keepalive_enabled,
+            passive_state_capture_enabled: self.passive_state_capture_enabled,
             pricing: Arc::clone(&self.pricing),
             request_location: self.request_location.clone(),
             account_selection_policy: self.account_selection_policy,
@@ -1092,6 +1110,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             openai_prefer_websocket: self.openai_prefer_websocket,
             session_keepalive_enabled: self.session_keepalive_enabled,
+            passive_state_capture_enabled: self.passive_state_capture_enabled,
             pricing: Arc::clone(&self.pricing),
             request_location: self.request_location.clone(),
             account_selection_policy: self.account_selection_policy,

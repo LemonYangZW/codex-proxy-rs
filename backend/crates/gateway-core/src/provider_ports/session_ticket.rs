@@ -4,6 +4,17 @@ use crate::account::ProviderAccountId;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
+/// 票据来源；旧缓存没有此字段一律按 `ActiveProbe` 解释（历史上只有该来源）。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketSource {
+    /// 动态代理主动探测写入。
+    #[default]
+    ActiveProbe,
+    /// 真实业务响应被动观测写入。
+    PassiveObservation,
+}
+
 // 不实现 Debug，票据原文只能用于存储与对应账号的出站请求。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProviderSessionTicket {
@@ -13,6 +24,8 @@ pub struct ProviderSessionTicket {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_binding: Option<[u8; 32]>,
     pub expires_at: i64,
+    #[serde(default)]
+    pub source: TicketSource,
 }
 
 pub trait ProviderSessionTicketPort: Send + Sync {
