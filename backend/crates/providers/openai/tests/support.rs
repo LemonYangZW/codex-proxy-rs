@@ -140,7 +140,8 @@ impl MemoryAccountStore {
         let account = stored.account.clone();
         let email = account.email().map(str::to_owned);
         let upstream_account_id = account.upstream_account_id().map(str::to_owned);
-        stored.account = account.with_profile(email, upstream_account_id, plan_type.map(str::to_owned));
+        stored.account =
+            account.with_profile(email, upstream_account_id, plan_type.map(str::to_owned));
     }
 
     pub(crate) fn set_session_models(&self, id: &str, models: Vec<String>) {

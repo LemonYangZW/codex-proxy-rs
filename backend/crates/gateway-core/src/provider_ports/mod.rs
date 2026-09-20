@@ -997,7 +997,9 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     }
 
     /// 被动捕获全局开关；与 `load_session_keepalive_proxy` 完全独立，不依赖动态代理。
-    fn load_passive_state_capture_enabled(&self) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+    fn load_passive_state_capture_enabled(
+        &self,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }
 

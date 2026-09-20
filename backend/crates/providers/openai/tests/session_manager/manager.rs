@@ -1263,7 +1263,10 @@ async fn active_keepalive_stays_fail_closed_even_when_passive_capture_is_also_en
     let ok = manager
         .rewrite(&store.account("acct_a").unwrap(), &mut request, true, true)
         .await;
-    assert!(!ok, "A 路径缺票必须继续 fail-closed，不能被 B 路径的开关放行");
+    assert!(
+        !ok,
+        "A 路径缺票必须继续 fail-closed，不能被 B 路径的开关放行"
+    );
 }
 
 #[tokio::test]
@@ -1275,7 +1278,10 @@ async fn global_keepalive_off_never_fail_closes_accounts_that_still_enable_it() 
     let ok = manager
         .rewrite(&store.account("acct_a").unwrap(), &mut request, false, true)
         .await;
-    assert!(ok, "全局主动保活关闭后，账号级 A 开关不得再 fail-closed 拒绝请求");
+    assert!(
+        ok,
+        "全局主动保活关闭后，账号级 A 开关不得再 fail-closed 拒绝请求"
+    );
     assert_eq!(request.turn_state.as_deref(), Some("client-state"));
 }
 
@@ -1343,9 +1349,20 @@ async fn observe_passive_state_only_caches_length_matching_plan_state() {
 
     // 开关关闭：不写入。
     manager
-        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("off"))
+        .observe_passive_state(
+            &store.account("acct_a").unwrap(),
+            "gpt-5.6-sol",
+            &state("off"),
+        )
         .await;
-    assert!(policy.tickets.load(&id, "gpt-5.6-sol").await.unwrap().is_none());
+    assert!(
+        policy
+            .tickets
+            .load(&id, "gpt-5.6-sol")
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     store.set_passive_state_capture("acct_a", true);
 
@@ -1357,7 +1374,14 @@ async fn observe_passive_state_only_caches_length_matching_plan_state() {
             &sized_state("degraded", 312),
         )
         .await;
-    assert!(policy.tickets.load(&id, "gpt-5.6-sol").await.unwrap().is_none());
+    assert!(
+        policy
+            .tickets
+            .load(&id, "gpt-5.6-sol")
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // 长度匹配：写入，来源标记为 PassiveObservation，TTL 约为一小时。
     manager
@@ -1386,10 +1410,18 @@ async fn observe_passive_state_skips_write_when_existing_ticket_is_still_fresh()
     let id = ProviderAccountId::new("acct_a").unwrap();
 
     manager
-        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("first"))
+        .observe_passive_state(
+            &store.account("acct_a").unwrap(),
+            "gpt-5.6-sol",
+            &state("first"),
+        )
         .await;
     manager
-        .observe_passive_state(&store.account("acct_a").unwrap(), "gpt-5.6-sol", &state("second"))
+        .observe_passive_state(
+            &store.account("acct_a").unwrap(),
+            "gpt-5.6-sol",
+            &state("second"),
+        )
         .await;
     let ticket = policy
         .tickets

@@ -314,10 +314,12 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
         &self,
     ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
-            sqlx::query_scalar("select passive_state_capture_enabled from runtime_settings where id = 1")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|_| provider_unavailable("load passive state capture switch"))
+            sqlx::query_scalar(
+                "select passive_state_capture_enabled from runtime_settings where id = 1",
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| provider_unavailable("load passive state capture switch"))
         })
     }
 

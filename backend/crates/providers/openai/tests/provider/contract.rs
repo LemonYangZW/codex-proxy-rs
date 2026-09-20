@@ -1179,10 +1179,7 @@ async fn passive_capture_stores_the_turn_state_of_a_normally_completed_response(
             ]),
         )
         .expect("OpenAI payload")
-        .with_context(Map::from_iter([(
-            "use_websocket".to_owned(),
-            json!(false),
-        )])),
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
     ));
     let context = AttemptContext::new(
         RequestAttemptContext::new(

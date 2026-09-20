@@ -182,7 +182,9 @@ fn model_match(model: &'static str) -> impl wiremock::Match {
     }
 }
 
-use gateway_core::provider_ports::{ProviderSessionTicket, ProviderSessionTicketPort, TicketSource};
+use gateway_core::provider_ports::{
+    ProviderSessionTicket, ProviderSessionTicketPort, TicketSource,
+};
 #[derive(Default)]
 pub(super) struct MemoryTickets {
     entries: Mutex<

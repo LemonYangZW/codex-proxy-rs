@@ -319,7 +319,10 @@ impl SessionManager {
         self.validate_refresh_context(account, proxy, sessions, generation, model, binding)
             .await
             .map_err(str::to_owned)?;
-        match self.load_ticket(account, model, TicketScope::Keepalive).await {
+        match self
+            .load_ticket(account, model, TicketScope::Keepalive)
+            .await
+        {
             Ok(Some(ticket))
                 if ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS =>
             {
@@ -624,7 +627,12 @@ impl SessionManager {
     /// 内部重新获取一次完整凭据（与 A 路径 `refresh_rounds` 同一入口），不依赖调用方
     /// 传入的业务 `lease` 拆分字段——`lease` 不携带 `principal`，若直接复用会导致
     /// 与 A 路径写入的 `credential_binding` 哈希公式不一致，破坏凭据变更检测。
-    pub async fn observe_passive_state(&self, account: &ProviderAccount, model: &str, raw_state: &str) {
+    pub async fn observe_passive_state(
+        &self,
+        account: &ProviderAccount,
+        model: &str,
+        raw_state: &str,
+    ) {
         if !passive_managed(account, model) {
             return;
         }
@@ -732,7 +740,10 @@ impl SessionManager {
         if !managed(account, model) {
             return true;
         }
-        match self.load_ticket(account, model, TicketScope::Keepalive).await {
+        match self
+            .load_ticket(account, model, TicketScope::Keepalive)
+            .await
+        {
             Ok(Some(_)) => true,
             result => {
                 let reason = result.err().unwrap_or_else(|| "ticket_missing".to_owned());
