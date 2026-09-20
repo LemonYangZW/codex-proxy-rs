@@ -71,7 +71,6 @@ impl DatabaseDumpPort for PgDumpAdapter {
         file_options.create(true).write(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt as _;
             file_options.mode(0o600);
         }
         let file = file_options
