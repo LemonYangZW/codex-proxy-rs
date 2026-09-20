@@ -25,7 +25,7 @@ function confirm() {
     <div class="grid gap-3">
       <BaseSwitch :model-value="enabled" label="开启被动捕获" show-label :disabled="disabled" @click.capture.prevent="toggle" />
       <p class="m-0 text-cp-sm text-cp-text-secondary">
-        默认关闭，与「State 重写」互相独立、不共用开关，需要账号也单独开启。不主动发探针，只从真实业务响应里顺手观测未降智的 State，在有效期内复用给同账号同模型的后续请求；没有可用 State 时按原样放行，不会拒绝或阻塞业务请求。判定标准与重写模型清单与「State 重写」共用。
+        默认关闭，与「State 重写」互相独立、不共用开关，需要账号也单独开启。不主动发探针，只从真实业务响应里顺手观测未降智的 State，在有效期内复用给同账号同模型的后续请求；没有可用 State 时按原样放行，不会拒绝或阻塞业务请求。判定标准与「State 模型范围」清单与「State 重写」共用。
       </p>
       <p class="m-0 text-cp-sm text-cp-warning-text">
         本质仍是跨轮次复用 State，与官方约定存在已知偏离，因此同样需要单独确认风险。确认后还需保存设置才会生效。

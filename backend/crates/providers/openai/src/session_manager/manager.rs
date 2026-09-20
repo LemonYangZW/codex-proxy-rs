@@ -319,7 +319,7 @@ impl SessionManager {
         self.validate_refresh_context(account, proxy, sessions, generation, model, binding)
             .await
             .map_err(str::to_owned)?;
-        match self.load_ticket(account, model).await {
+        match self.load_ticket(account, model, TicketScope::Keepalive).await {
             Ok(Some(ticket))
                 if ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS =>
             {
@@ -643,7 +643,9 @@ impl SessionManager {
             );
             return;
         }
-        if let Ok(Some(ticket)) = self.load_ticket(account, model).await
+        if let Ok(Some(ticket)) = self
+            .load_ticket(account, model, TicketScope::PassiveCapture)
+            .await
             && ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS
         {
             return;
@@ -681,6 +683,7 @@ impl SessionManager {
         &self,
         account: &ProviderAccount,
         model: &str,
+        scope: TicketScope,
     ) -> Result<Option<ProviderSessionTicket>, String> {
         let tickets = self.tickets.as_ref().ok_or("cache_not_configured")?;
         let ticket = tickets
@@ -713,9 +716,9 @@ impl SessionManager {
                 .repository
                 .decode_runtime_credential(&loaded)
                 .map_err(|_| "credential_lookup_failed")?;
-            if !eligible(&loaded.account)
+            if !credential_ready(&loaded.account)
                 || !loaded.account.model_access().allows(model)
-                || !managed(&loaded.account, model)
+                || !scope.allows(&loaded.account, model)
                 || credential_binding(&loaded.account, &current)? != binding
             {
                 return Err("credential_changed".to_owned());
@@ -729,7 +732,7 @@ impl SessionManager {
         if !managed(account, model) {
             return true;
         }
-        match self.load_ticket(account, model).await {
+        match self.load_ticket(account, model, TicketScope::Keepalive).await {
             Ok(Some(_)) => true,
             result => {
                 let reason = result.err().unwrap_or_else(|| "ticket_missing".to_owned());
@@ -743,20 +746,31 @@ impl SessionManager {
     ///
     /// A、B 两套开关同时命中时以 A（fail-closed）为准；A 未接管时若被动捕获
     /// 命中账号+模型，票据存在就覆盖，不存在就原样放行（fail-open）。
+    ///
+    /// 两个全局开关由调用方分别传入并各自约束对应分支：全局关掉 A 时账号级 A 开关
+    /// 不得再 fail-closed 拒绝请求，全局关掉 B 时账号级 B 开关也不得继续覆盖 State。
     pub async fn rewrite(
         &self,
         account: &ProviderAccount,
         request: &mut CodexResponsesRequest,
+        keepalive_enabled: bool,
+        passive_capture_enabled: bool,
     ) -> bool {
-        if managed(account, request.model()) {
-            let Ok(Some(ticket)) = self.load_ticket(account, request.model()).await else {
+        if keepalive_enabled && managed(account, request.model()) {
+            let Ok(Some(ticket)) = self
+                .load_ticket(account, request.model(), TicketScope::Keepalive)
+                .await
+            else {
                 return false;
             };
             apply_state(request, ticket.value);
             return true;
         }
-        if passive_managed(account, request.model())
-            && let Ok(Some(ticket)) = self.load_ticket(account, request.model()).await
+        if passive_capture_enabled
+            && passive_managed(account, request.model())
+            && let Ok(Some(ticket)) = self
+                .load_ticket(account, request.model(), TicketScope::PassiveCapture)
+                .await
         {
             apply_state(request, ticket.value);
         }
@@ -833,15 +847,20 @@ impl DaemonTask for SessionManager {
     }
 }
 
-fn eligible(account: &ProviderAccount) -> bool {
+/// 与主动保活/被动捕获两个开关都无关的通用凭据可用性：账号本身可用、鉴权材料
+/// 就绪且未过期。`eligible()` 在此基础上追加主动保活资格。
+fn credential_ready(account: &ProviderAccount) -> bool {
     account.provider().as_str() == "openai"
         && account.authentication_kind() == "oauth"
         && account.enabled()
-        && account.enable_session_keepalive()
         && account.credential_state() == CredentialState::Ready
         && account
             .access_token_expires_at()
             .is_none_or(|expires| expires > std::time::SystemTime::now())
+}
+
+fn eligible(account: &ProviderAccount) -> bool {
+    credential_ready(account) && account.enable_session_keepalive()
 }
 
 fn admin_error(kind: ProviderAdminErrorKind, message: &'static str) -> ProviderAdminError {
@@ -883,6 +902,23 @@ fn managed(account: &ProviderAccount, model: &str) -> bool {
             .session_keepalive_models()
             .iter()
             .any(|selected| selected == model)
+}
+
+/// 票据复用场景。凭据 revision 变化后要重新确认账号资格，但主动保活与被动捕获
+/// 各看各的开关：只开被动捕获的账号不应被主动保活资格挡住已绑定同一鉴权的票据。
+#[derive(Clone, Copy)]
+enum TicketScope {
+    Keepalive,
+    PassiveCapture,
+}
+
+impl TicketScope {
+    fn allows(self, account: &ProviderAccount, model: &str) -> bool {
+        match self {
+            Self::Keepalive => managed(account, model),
+            Self::PassiveCapture => passive_managed(account, model),
+        }
+    }
 }
 
 /// 与 `managed()` 完全独立的被动捕获准入；只读账号自己的开关，不读全局开关

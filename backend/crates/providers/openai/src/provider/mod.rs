@@ -557,10 +557,17 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        // 两个全局开关分别下传，由 rewrite() 各自约束对应分支；此处的 `||` 只是避免
+        // 两者都关时白跑一次 await，不参与分支判定。
         if (context.session_keepalive_enabled() || context.passive_state_capture_enabled())
             && let Some(sessions) = &self.sessions
             && !sessions
-                .rewrite(lease.account(), &mut upstream_request)
+                .rewrite(
+                    lease.account(),
+                    &mut upstream_request,
+                    context.session_keepalive_enabled(),
+                    context.passive_state_capture_enabled(),
+                )
                 .await
         {
             return Err(map_selection_error(

@@ -112,7 +112,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         <BaseSwitch v-model="enablePassiveStateCapture" label="切换账号被动捕获 State" :disabled="saving" />
       </div>
 
-      <AccountSessionModelsField v-if="(enableSessionKeepalive || enablePassiveStateCapture) && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" />
+      <AccountSessionModelsField v-if="(enableSessionKeepalive || enablePassiveStateCapture) && account.provider === 'openai' && account.authenticationKind === 'oauth'" v-model="sessionKeepaliveModels" :account-id="account.id" :disabled="saving" :keepalive-enabled="enableSessionKeepalive" :passive-enabled="enablePassiveStateCapture" />
 
       <BaseFormItem label="备注">
         <BaseTextarea

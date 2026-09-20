@@ -996,6 +996,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_metadata_old",
         "acct_unknown_continuation",
         "acct_unknown_turn_state",
+        "acct_passive",
         "acct_prefetch_limit",
         "acct_presentation",
         "acct_provider_contract",
@@ -1133,6 +1134,89 @@ fn context_with_state_owner_and_location(
         None,
         CancellationToken::new(),
     )
+}
+
+/// 被动捕获必须在绝大多数请求走的「流内 completed」路径上生效，而不只是 EOF 收尾。
+#[tokio::test]
+async fn passive_capture_stores_the_turn_state_of_a_normally_completed_response() {
+    use crate::session_manager::MemoryTickets;
+    use gateway_core::provider_ports::ProviderSessionTicketPort;
+    use provider_openai::SessionManager;
+
+    // 合成 pro 套餐基准长度（292）的 State；短于基准会被判定为降智而跳过缓存。
+    let turn_state = format!("gAAAAA{:A<284}==", "passive-capture");
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive").await;
+    store.set_session_keepalive("acct_passive", false);
+    store.set_passive_state_capture("acct_passive", true);
+    store.set_session_models("acct_passive", vec!["gpt-5.4".to_owned()]);
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", turn_state.as_str())
+                .set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let tickets = Arc::new(MemoryTickets::default());
+    let sessions = Arc::new(SessionManager::new(
+        store.repository(),
+        crate::support::runtime_policy(),
+        wire_profile(),
+        upstream.uri(),
+        Some(tickets.clone()),
+    ));
+    let provider = provider_with_base_url(&store, upstream.uri()).with_session_manager(sessions);
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([(
+            "use_websocket".to_owned(),
+            json!(false),
+        )])),
+    ));
+    let context = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_passive_capture").expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        )
+        .with_passive_state_capture_enabled(true),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    );
+    let mut stream = provider
+        .execute(planned_request("openai", operation), context)
+        .await
+        .expect("prepare passive capture stream");
+    while let Some(event) = stream.next().await {
+        event.expect("passive capture response");
+    }
+    let cached = tickets
+        .load(
+            &ProviderAccountId::new("acct_passive").expect("account id"),
+            "gpt-5.4",
+        )
+        .await
+        .expect("ticket lookup");
+    assert_eq!(
+        cached.map(|ticket| ticket.value),
+        Some(turn_state),
+        "正常完成的业务响应必须在流内就完成被动捕获，不能只依赖 EOF 收尾路径"
+    );
 }
 
 fn replay_any_context(request_id: &str, owner_account_id: &str) -> AttemptContext {

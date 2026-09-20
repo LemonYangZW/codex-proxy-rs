@@ -28,7 +28,7 @@ async fn refresh_and_rewrite_isolate_every_account_and_model_using_only_oam_prox
         for model in SESSION_KEEPALIVE_MODELS {
             let mut request = request(model);
             manager
-                .rewrite(&store.account(account).unwrap(), &mut request)
+                .rewrite(&store.account(account).unwrap(), &mut request, true, true)
                 .await;
             assert_eq!(
                 request.turn_state.as_deref(),
@@ -57,7 +57,7 @@ async fn disabled_accounts_other_models_and_missing_proxy_never_refresh_or_overr
     );
     let mut req = request("gpt-6-astra");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
     *policy.proxy.lock().unwrap() = None;
@@ -70,7 +70,7 @@ async fn disabled_accounts_other_models_and_missing_proxy_never_refresh_or_overr
     for model in ["5.6 sol", "6", "gpt-6", "gpt-6-astra ", "GPT-5.6-sol"] {
         let mut req = request(model);
         manager
-            .rewrite(&store.account("acct_b").unwrap(), &mut req)
+            .rewrite(&store.account("acct_b").unwrap(), &mut req, true, true)
             .await;
         assert_eq!(req.turn_state.as_deref(), Some("client-state"));
     }
@@ -97,14 +97,14 @@ async fn partial_failure_keeps_previous_state_without_extending_its_expiry() {
     assert!(pending.await.unwrap_err().is_cancelled());
     let mut sol = request("gpt-5.6-sol");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut sol)
+        .rewrite(&store.account("acct_a").unwrap(), &mut sol, true, true)
         .await;
     assert_eq!(sol.turn_state.as_deref(), Some(state("old-state").as_str()));
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(3600)).await;
     let mut expired = request("gpt-5.6-sol");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut expired)
+        .rewrite(&store.account("acct_a").unwrap(), &mut expired, true, true)
         .await;
     assert_eq!(expired.turn_state.as_deref(), Some("client-state"));
 }
@@ -162,7 +162,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
     assert!(result.models.iter().all(|item| item.error.is_some()));
     let mut req = request("gpt-6-astra");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
 
@@ -173,7 +173,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
     let result = manager.refresh(&id).await.unwrap();
     assert!(result.models.iter().all(|item| item.error.is_none()));
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(
         req.turn_state.as_deref(),
@@ -182,7 +182,7 @@ async fn duplicate_refresh_is_rejected_and_invalidated_inflight_results_cannot_r
     manager.invalidate(&id).await;
     let mut req = request("gpt-6-astra");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
 }
@@ -275,7 +275,7 @@ async fn missing_header_is_rejected_but_valid_header_does_not_wait_for_sse_compl
     assert!(pending.await.unwrap_err().is_cancelled());
     let mut req = request("gpt-6-astra");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some(state("unusable").as_str()));
 }
@@ -326,7 +326,7 @@ async fn rewritten_business_http_uses_original_proxy_and_never_oam_pool() {
     .unwrap();
     let mut req = request("gpt-6-astra");
     req.force_http_sse = true;
-    manager.rewrite(&account, &mut req).await;
+    manager.rewrite(&account, &mut req, true, true).await;
     let context = CodexRequestContext {
         trace: None,
         authorization: "Bearer acct_a",
@@ -383,7 +383,7 @@ async fn actual_credential_rotation_prevents_reusing_previous_state() {
     let rotated = store.account("acct_a").unwrap();
     assert!(!manager.available(&rotated, "gpt-6-astra").await);
     let mut req = request("gpt-6-astra");
-    assert!(!manager.rewrite(&rotated, &mut req).await);
+    assert!(!manager.rewrite(&rotated, &mut req, true, true).await);
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
 }
 
@@ -411,7 +411,7 @@ async fn cookie_capture_preserves_tickets_expiry_and_success_pruning_after_resta
     for model in SESSION_KEEPALIVE_MODELS {
         assert!(manager.available(&current, model).await);
         let mut req = request(model);
-        assert!(manager.rewrite(&current, &mut req).await);
+        assert!(manager.rewrite(&current, &mut req, true, true).await);
         assert_eq!(req.turn_state.as_deref(), Some(state("retained").as_str()));
     }
     let after = manager.refresh(&id).await.unwrap();
@@ -498,14 +498,14 @@ async fn selected_models_are_exact_and_support_more_than_two() {
     for model in &models {
         let mut req = request(model);
         manager
-            .rewrite(&store.account("acct_a").unwrap(), &mut req)
+            .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
             .await;
         assert_eq!(req.turn_state.as_deref(), Some(state(model).as_str()));
     }
     store.set_session_models("acct_a", vec!["custom-model".to_owned()]);
     let mut req = request("gpt-6-astra");
     manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut req)
+        .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
         .await;
     assert_eq!(req.turn_state.as_deref(), Some("client-state"));
     assert_eq!(proxy.received_requests().await.unwrap().len(), 3);
@@ -545,7 +545,7 @@ async fn wait_for_state(
         loop {
             let mut req = request(model);
             manager
-                .rewrite(&store.account("acct_a").unwrap(), &mut req)
+                .rewrite(&store.account("acct_a").unwrap(), &mut req, true, true)
                 .await;
             if req.turn_state.as_deref() == Some(state(label).as_str()) {
                 return;
@@ -915,7 +915,7 @@ async fn tickets_restore_after_restart_skip_fresh_refresh_near_expiry_and_fail_c
     assert!(!restored.available(&account, "gpt-5.6-sol").await);
     assert!(
         !restored
-            .rewrite(&account, &mut request("gpt-5.6-sol"))
+            .rewrite(&account, &mut request("gpt-5.6-sol"), true, true)
             .await
     );
     policy.tickets.unavailable.store(false, Ordering::SeqCst);
@@ -1218,7 +1218,7 @@ async fn passive_capture_fail_open_without_ticket_leaves_request_untouched() {
     store.set_passive_state_capture("acct_a", true);
     let mut request = request("gpt-5.6-sol");
     let ok = manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut request)
+        .rewrite(&store.account("acct_a").unwrap(), &mut request, true, true)
         .await;
     assert!(ok, "passive capture must never block the request");
     assert_eq!(request.turn_state.as_deref(), Some("client-state"));
@@ -1246,7 +1246,7 @@ async fn passive_capture_applies_a_present_ticket_when_active_keepalive_is_disab
         .await
         .unwrap();
     let mut request = request("gpt-5.6-sol");
-    let ok = manager.rewrite(&account, &mut request).await;
+    let ok = manager.rewrite(&account, &mut request, true, true).await;
     assert!(ok);
     assert_eq!(
         request.turn_state.as_deref(),
@@ -1261,9 +1261,77 @@ async fn active_keepalive_stays_fail_closed_even_when_passive_capture_is_also_en
     store.set_passive_state_capture("acct_a", true);
     let mut request = request("gpt-5.6-sol");
     let ok = manager
-        .rewrite(&store.account("acct_a").unwrap(), &mut request)
+        .rewrite(&store.account("acct_a").unwrap(), &mut request, true, true)
         .await;
     assert!(!ok, "A 路径缺票必须继续 fail-closed，不能被 B 路径的开关放行");
+}
+
+#[tokio::test]
+async fn global_keepalive_off_never_fail_closes_accounts_that_still_enable_it() {
+    let (store, _, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", true);
+    store.set_passive_state_capture("acct_a", true);
+    let mut request = request("gpt-5.6-sol");
+    let ok = manager
+        .rewrite(&store.account("acct_a").unwrap(), &mut request, false, true)
+        .await;
+    assert!(ok, "全局主动保活关闭后，账号级 A 开关不得再 fail-closed 拒绝请求");
+    assert_eq!(request.turn_state.as_deref(), Some("client-state"));
+}
+
+#[tokio::test]
+async fn global_passive_capture_off_stops_overriding_state() {
+    let (store, policy, manager) = fixture(None).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", true);
+    let account = store.account("acct_a").unwrap();
+    policy
+        .tickets
+        .store(
+            account.id(),
+            "gpt-5.6-sol",
+            &ProviderSessionTicket {
+                value: state("passive-ticket"),
+                credential_revision: account.revision().get(),
+                credential_binding: None,
+                expires_at: Utc::now().timestamp() + 3600,
+                source: TicketSource::PassiveObservation,
+            },
+        )
+        .await
+        .unwrap();
+    let mut request = request("gpt-5.6-sol");
+    assert!(manager.rewrite(&account, &mut request, true, false).await);
+    assert_eq!(
+        request.turn_state.as_deref(),
+        Some("client-state"),
+        "全局被动捕获关闭后不得继续覆盖 State"
+    );
+}
+
+#[tokio::test]
+async fn passive_only_account_reuses_its_ticket_after_a_cookie_update() {
+    let proxy = MockServer::start().await;
+    let (store, _, manager) = fixture(Some(&proxy.uri())).await;
+    for model in SESSION_KEEPALIVE_MODELS {
+        mock_model(&proxy, "acct_a", model, success("passive-retained")).await;
+    }
+    manager
+        .refresh(&ProviderAccountId::new("acct_a").unwrap())
+        .await
+        .unwrap();
+    // Cookie 更新推高 revision 后转为纯被动账号：鉴权绑定没变，票据不该被主动保活资格挡下。
+    capture_cookie(&store).await;
+    store.set_session_keepalive("acct_a", false);
+    store.set_passive_state_capture("acct_a", true);
+    let current = store.account("acct_a").unwrap();
+    let mut req = request("gpt-5.6-sol");
+    assert!(manager.rewrite(&current, &mut req, true, true).await);
+    assert_eq!(
+        req.turn_state.as_deref(),
+        Some(state("passive-retained").as_str()),
+        "凭据 revision 变化只该比对鉴权绑定，不该要求主动保活资格"
+    );
 }
 
 #[tokio::test]

@@ -9,18 +9,32 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { accountModelIdError } from '../utils/modelAccess'
 
-const props = defineProps<{ accountId: string, disabled: boolean }>()
+const props = defineProps<{
+  accountId: string
+  disabled: boolean
+  keepaliveEnabled: boolean
+  passiveEnabled: boolean
+}>()
 const selected = defineModel<string[]>({ required: true })
 const catalog = ref<string[]>([])
 const manual = ref('')
 const inputError = ref('')
 const request = useRequestState()
 const availableModels = computed(() => [...new Set(catalog.value)].filter(model => !selected.value.includes(model)))
+// 两种模式共用这份模型范围，但取得 State 的方式完全不同，说明必须跟着启用模式走。
+const description = computed(() => {
+  const suffix = '每个模型的 State 独立缓存、互不混用。请选择实际的上游模型 ID（最多 32 个）。'
+  if (props.keepaliveEnabled && props.passiveEnabled)
+    return `State 重写对每个模型独立发送 hi 探针，被动捕获则只从真实业务响应中观测。${suffix}`
+  if (props.passiveEnabled)
+    return `不发送任何探针，仅从这些模型的真实业务响应中观测并缓存 State。${suffix}`
+  return `自动使用全局动态代理，对每个模型独立发送 hi 并提取 State。${suffix}`
+})
 function select(id: string, checked: boolean) {
   if (props.disabled)
     return
   if (checked && !selected.value.includes(id) && selected.value.length >= 32) {
-    inputError.value = '最多选择 32 个重写模型'
+    inputError.value = '最多选择 32 个模型'
     return
   }
   selected.value = checked ? [...new Set([...selected.value, id])] : selected.value.filter(model => model !== id)
@@ -57,26 +71,26 @@ watch(() => props.accountId, () => {
 </script>
 
 <template>
-  <BaseFormItem label="State 重写模型" description="自动使用全局动态代理。每个模型独立发送 hi、提取并缓存 State，互不混用。请选择实际的上游模型 ID（最多 32 个）。">
+  <BaseFormItem label="State 模型范围" :description="description">
     <div class="grid gap-3">
       <BaseScrollbar max-height="12rem">
         <div class="grid gap-3">
           <p class="m-0 text-cp-sm text-cp-text-secondary">
             已选模型（{{ selected.length }}/32）
           </p>
-          <div class="grid grid-cols-2 gap-2" role="group" aria-label="已选重写模型">
+          <div class="grid grid-cols-2 gap-2" role="group" aria-label="已选 State 模型">
             <BaseCheckbox v-for="model in selected" :key="model" :label="model" :title="model" show-label :model-value="true" :disabled="disabled" @update:model-value="select(model, $event)" />
           </div>
           <p v-if="availableModels.length" class="m-0 text-cp-sm text-cp-text-secondary">
             可添加模型
           </p>
-          <div v-if="availableModels.length" class="grid grid-cols-2 gap-2" role="group" aria-label="可添加重写模型">
+          <div v-if="availableModels.length" class="grid grid-cols-2 gap-2" role="group" aria-label="可添加 State 模型">
             <BaseCheckbox v-for="model in availableModels" :key="model" :label="model" :title="model" show-label :model-value="false" :disabled="disabled" @update:model-value="select(model, $event)" />
           </div>
         </div>
       </BaseScrollbar>
       <div class="flex gap-2">
-        <BaseInput v-model="manual" class="min-w-0 flex-1" aria-label="自定义重写模型" placeholder="输入其他模型 ID" :disabled="disabled" @keydown.enter.prevent="add" />
+        <BaseInput v-model="manual" class="min-w-0 flex-1" aria-label="自定义 State 模型" placeholder="输入其他模型 ID" :disabled="disabled" @keydown.enter.prevent="add" />
         <BaseButton variant="secondary" :disabled="disabled || !manual.trim()" @click="add">
           添加
         </BaseButton>

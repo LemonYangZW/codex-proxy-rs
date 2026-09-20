@@ -948,6 +948,26 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
             }
+            // 被动捕获：真实业务响应确认的最终 turn_state 顺手交给 SessionManager 判断
+            // 是否结构合法、要不要缓存复用；诊断专用租约不写回账号状态。判据必须与
+            // attach（紧随其后会取走 capture）完全一致——用 wire 层的终态事件而不是
+            // canonical `completed`，HTTP/SSE 的 canonical 完成要到 finish() 才产出，
+            // 用 `completed` 会在这里漏掉、到 EOF 路径时 capture 又已经被取走。
+            if allows_account_state_mutation
+                && events
+                    .iter()
+                    .any(|event| terminal_response_output(event).is_some())
+                && terminal_failure.is_none()
+                && context.passive_state_capture_enabled()
+                && let Some(sessions) = sessions.as_ref()
+                && let Some(state) = session_capture
+                    .as_ref()
+                    .and_then(|capture| capture.turn_state.clone())
+            {
+                sessions
+                    .observe_passive_state(&active_account, upstream_model.as_str(), &state)
+                    .await;
+            }
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
@@ -1068,9 +1088,10 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         )
         .await
         .unwrap_or(false);
-        // 被动捕获：真实业务响应确认的最终 turn_state 顺手交给 SessionManager 判断
-        // 是否结构合法、要不要缓存复用；诊断专用租约不写回账号状态。
+        // 被动捕获收尾路径：流内没有出现 completed、直到 finish() 才产出事件时走这里。
+        // 与循环内那次互斥（循环内命中 completed 会直接 return），不会重复写入。
         if allows_account_state_mutation
+            && terminal_failure.is_none()
             && context.passive_state_capture_enabled()
             && let Some(sessions) = sessions.as_ref()
             && let Some(state) = session_capture

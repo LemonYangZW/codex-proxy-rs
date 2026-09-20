@@ -102,7 +102,7 @@ export function useAccountEditor(options: {
       }
     }
     if (editingAccount.value?.provider === 'openai' && (sessionKeepaliveModels.value.length < 1 || sessionKeepaliveModels.value.length > 32)) {
-      toast.warning('请选择 1～32 个重写模型')
+      toast.warning('请选择 1～32 个 State 模型')
       return
     }
     const modelError = accountModelAccessError(modelAccess.value)
