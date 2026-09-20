@@ -362,7 +362,15 @@ async fn an_existing_session_should_follow_each_requests_downstream_transport() 
                     "expected response.create for turn {index}, got {frame:?}"
                 );
                 let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
-                assert_eq!(body["input"], format!("turn-{index}"));
+                let expected_input = json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": format!("turn-{index}"),
+                    }],
+                });
+                assert_eq!(body["input"], Value::Array(vec![expected_input]),);
                 websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":format!("resp_switch_{index}"),"model":"gpt-5.4","status":"completed","output":[]}}).to_string().into())).await.unwrap();
             }
         });
